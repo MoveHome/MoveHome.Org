@@ -59,6 +59,27 @@ function isAsyncGenerator(v: unknown): v is AsyncGenerator<unknown> {
   return typeof v === 'object' && v !== null && Symbol.asyncIterator in v;
 }
 
+// Detect a create_enquiry invocation in a raw message/send body. The enquiry
+// skill is a write that emails a real estate agent, so it gets a tighter
+// per-IP throttle than the 60/min the read skills share.
+const ENQUIRY_PER_MIN = 5;
+function isCreateEnquiry(raw: unknown): boolean {
+  const r = raw as { method?: unknown; params?: { message?: { parts?: unknown } } };
+  if (r?.method !== 'message/send') return false;
+  const parts = r.params?.message?.parts;
+  if (!Array.isArray(parts)) return false;
+  return parts.some(
+    (p) =>
+      p && typeof p === 'object' && (p as { kind?: unknown }).kind === 'data' &&
+      (p as { data?: { skill?: unknown } }).data?.skill === 'create_enquiry'
+  );
+}
+
+function clientIp(req: Request): string {
+  const fwd = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim();
+  return fwd || req.headers.get('x-real-ip') || 'unknown';
+}
+
 export function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
 }
@@ -97,6 +118,23 @@ export async function POST(req: Request) {
       ...rl.headers,
       'Retry-After': String(rl.retryAfter)
     });
+  }
+
+  // Extra throttle for the one write skill. Reads already passed the 60/min
+  // bucket above; enquiries get a tighter per-IP cap on top. Fails open.
+  if (isCreateEnquiry(raw)) {
+    try {
+      const ipKey = `a2a-enquiry:${createHash('sha256').update(clientIp(req)).digest('hex').slice(0, 32)}`;
+      const decision = await enforceRateLimit(ipKey, 'enquiry.write', ENQUIRY_PER_MIN);
+      if (!decision.ok) {
+        return json(rpcError(requestId(raw), -32603, 'Enquiry rate limit exceeded.'), 429, {
+          ...rateLimitHeaders(decision),
+          'Retry-After': String(decision.retryAfter)
+        });
+      }
+    } catch {
+      /* limiter unavailable — fail open */
+    }
   }
 
   try {

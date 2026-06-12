@@ -29,7 +29,8 @@ export type EndpointGroup =
   | 'products.read'
   | 'products.write'
   | 'health'
-  | 'a2a';
+  | 'a2a'
+  | 'enquiry.write';
 
 const GROUP_OVERRIDES: Partial<Record<EndpointGroup, number>> = {
   // Token endpoint stays modest per spec recommendation (10/min/client).

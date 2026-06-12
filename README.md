@@ -12,8 +12,8 @@ Operated by [Move Home Organisation CIC](https://movehome.org)
 
 - The Next.js app that powers [movehome.org](https://movehome.org).
 - A reference implementation showing how any organisation can build a RAIA Protocol consumer.
-- Read-only. Anonymous. No PII. No proprietary logic.
-- Implements RAIA Protocol v0.1.
+- Public, anonymous reads. The only write path forwards an enquiry (name, email) to the source agent — no proprietary logic.
+- Implements the RAIA Protocol (listing schema v0.1) and exposes an agent-to-agent (A2A) API for AI agents.
 
 ## What this repo is **not**
 
@@ -54,6 +54,20 @@ npm run dev
 ```
 
 Open `http://localhost:3000`. With an empty mirror you'll see no listings — that's expected.
+
+---
+
+## APIs & agent access
+
+The catalogue is open to AI agents over the [A2A protocol](https://a2a-protocol.org):
+
+- **Agent Card:** `https://movehome.org/.well-known/agent-card.json`
+- **Endpoint:** `POST https://movehome.org/api/a2a` — skills `search_properties`, `get_property`, `create_enquiry`
+- **Guide:** [docs/raia-a2a-api.md](docs/raia-a2a-api.md)
+- **Local test console:** [`a2a-tester/`](a2a-tester/) — `node a2a-tester/serve.mjs`, then open `http://localhost:4400`
+
+Estate agencies push listings *into* MoveHome via the authenticated
+[RAIA Portal Feed API](docs/raia-portal-feed-api.md).
 
 ---
 

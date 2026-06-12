@@ -124,7 +124,8 @@ Artifact `search_results` → `{ total, count, offset, limit, listings: [ … ] 
 |---|---|---|
 | `raia_id` | string | e.g. `prop-gb-rlf-04827193` |
 
-Artifact `property` → `{ listing: { … } }`. Error `-32001` if no public listing matches.
+Artifact `property` → `{ listing: { … } }`. If no public listing matches, the
+Task comes back **`failed`** (not a JSON-RPC error) — see §5.
 
 ### `create_enquiry`
 Records an enquiry and forwards it to the source agent (SSRF-guarded; HTTPS
@@ -143,23 +144,48 @@ public hosts only — same pipeline as `POST /api/enquire`).
 
 Artifact `enquiry_receipt` → `{ enquiry_id, status: "received" }`.
 
+Because this is a write that reaches a real estate agent, it is rate-limited
+more tightly than the read skills (≈5 requests/min per IP) and is subject to
+anti-spam checks: a duplicate enquiry (same email + listing within ~10 minutes)
+or too many enquiries from one email in an hour come back as a **`failed`** Task
+or HTTP `429`. Treat those as terminal — do not blindly retry.
+
 ---
 
-## 5. Errors (JSON-RPC)
+## 5. Errors — two distinct failure modes
 
-Skill/dispatch errors are returned as JSON-RPC `error` objects (HTTP 200):
+This is the most important thing to get right when integrating. Failures come
+back in **one of two ways**, and you handle them differently:
 
-| Code | Meaning |
-|---|---|
-| `-32700` | Parse error (invalid JSON) — HTTP 400 |
-| `-32600` | Invalid JSON-RPC request — HTTP 400 |
-| `-32601` | Unknown method |
-| `-32602` | Invalid params (see `error.data.validation_errors[]`) or unknown skill |
-| `-32001` | Listing / task not found |
-| `-32603` | Internal error |
+**(a) Application failures → a `failed` Task (HTTP 200, JSON-RPC `result`).**
+A request that is well-formed but can't be fulfilled — unknown skill, invalid
+skill params, listing not found, enquiry rejected/rate-limited — returns a
+*successful JSON-RPC response* whose `result` is a Task with
+`status.state: "failed"` and a human-readable reason in `status.message`. There
+is **no** `error` object. Check `result.status.state` before trusting a result.
+
+```jsonc
+{ "jsonrpc": "2.0", "id": 1, "result": {
+    "kind": "task", "status": {
+      "state": "failed",
+      "message": { "role": "agent", "parts": [ { "kind": "text",
+        "text": "Invalid parameters: un_locode must be a 5-char UN/LOCODE, e.g. GBLON" } ] } } } }
+```
+
+**(b) Transport / protocol errors → a JSON-RPC `error` object.**
+
+| Code | Meaning | HTTP |
+|---|---|---|
+| `-32700` | Parse error (invalid JSON) | 400 |
+| `-32600` | Invalid JSON-RPC request | 400 |
+| `-32601` | Unknown method | 200 |
+| `-32004` | Streaming requested (`message/stream`) — unsupported, use `message/send` | 200 |
+| `-32001` | Task not found (`tasks/get` — tasks aren't persisted) | 200 |
+| `-32603` | Internal error / rate limit | 200 or 429 |
 
 Rate-limit breaches return HTTP **429** with a `-32603` body, `Retry-After`, and
-`X-RateLimit-*` headers. Default limit: **60 requests/min per IP**.
+`X-RateLimit-*` headers. Read skills: **60 requests/min per IP**; `create_enquiry`
+is tighter (≈5/min per IP) — see §4.
 
 ---
 
@@ -184,6 +210,19 @@ curl -s -X POST https://movehome.org/api/a2a -H 'Content-Type: application/json'
     "parts":[{"kind":"data","data":{"skill":"get_property","params":{"raia_id":"prop-gb-rlf-04827193"}}}]}}
 }' | jq '.result.artifacts[0].parts[0].data.listing'
 ```
+
+### Interactive test console
+
+The repo ships a zero-dependency web console for exploring this API — discovery,
+every skill, and an automated conformance suite covering the error paths above.
+From a checkout:
+
+```bash
+node a2a-tester/serve.mjs   # → http://localhost:4400
+```
+
+Point it at `https://movehome.org` or your own deployment. See
+[`a2a-tester/README.md`](../a2a-tester/README.md).
 
 > **Coming next:** an MCP server exposing the same property-discovery skills as
 > MCP tools, for agents that speak the Model Context Protocol.

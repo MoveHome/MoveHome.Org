@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MoveHome A2A Protocol Tester</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <!-- ── Top bar: target + discovery ─────────────────────────────────── -->
+    <header class="topbar">
+      <div class="brand">
+        <span class="dot"></span>
+        <div>
+          <strong>MoveHome A2A Tester</strong>
+          <small>Agent2Agent protocol harness · <span class="mono">@a2a-js/sdk 0.3.x</span></small>
+        </div>
+      </div>
+
+      <div class="target">
+        <label for="base">Target</label>
+        <input id="base" type="text" spellcheck="false" value="http://localhost:3000" />
+        <button class="preset" data-base="http://localhost:3000">local</button>
+        <button class="preset" data-base="https://movehome.org">prod</button>
+        <button id="discover" class="primary">Discover</button>
+        <span id="status" class="pill idle">not connected</span>
+      </div>
+    </header>
+
+    <div id="prod-warning" class="banner danger hidden">
+      ⚠ Target is <strong>production</strong>. Searches are real reads; <strong>create_enquiry inserts a
+      real lead and emails the source agent</strong>. The conformance suite never writes — but be careful in the Enquiry tab.
+    </div>
+
+    <nav class="tabs" id="tabs">
+      <button data-tab="discovery" class="active">Discovery</button>
+      <button data-tab="search">search_properties</button>
+      <button data-tab="get">get_property</button>
+      <button data-tab="enquiry">create_enquiry</button>
+      <button data-tab="suite">Conformance suite</button>
+    </nav>
+
+    <main>
+      <!-- ── Discovery ─────────────────────────────────────────────────── -->
+      <section data-panel="discovery" class="panel active">
+        <div class="panel-head">
+          <h2>Agent Card discovery</h2>
+          <p>Fetches the card from <span class="mono">GET /api/a2a</span> and validates the
+            published skills, transport, and protocol version. Hit <em>Discover</em> above to start.</p>
+        </div>
+        <div id="card-summary" class="card-summary empty">No card loaded yet.</div>
+        <details class="raw">
+          <summary>Raw Agent Card JSON</summary>
+          <pre id="card-json">—</pre>
+        </details>
+      </section>
+
+      <!-- ── search_properties ─────────────────────────────────────────── -->
+      <section data-panel="search" class="panel">
+        <div class="panel-head">
+          <h2>search_properties</h2>
+          <p>Search the catalogue. Every field is optional — leave blank to omit it from the params.</p>
+        </div>
+        <form id="search-form" class="grid">
+          <label>UN/LOCODE <input name="un_locode" placeholder="GBLON" /></label>
+          <label>Service type
+            <select name="service_type">
+              <option value="">(any)</option>
+              <option>long_term</option><option>short_term</option><option>sale</option>
+            </select>
+          </label>
+          <label>Property type
+            <select name="property_type">
+              <option value="">(any)</option>
+              <option>flat</option><option>house</option><option>studio</option>
+              <option>commercial</option><option>land</option><option>other</option>
+            </select>
+          </label>
+          <label>Bedrooms min <input name="bedrooms_min" type="number" min="0" max="50" /></label>
+          <label>Bedrooms max <input name="bedrooms_max" type="number" min="0" max="50" /></label>
+          <label>Max rent pcm <input name="rent_pcm_max" type="number" min="0" /></label>
+          <label>Max asking price <input name="asking_price_max" type="number" min="0" /></label>
+          <label>Features (comma-sep) <input name="features" placeholder="garden, parking" /></label>
+          <label>Limit <input name="limit" type="number" min="1" max="50" value="6" /></label>
+          <label>Offset <input name="offset" type="number" min="0" value="0" /></label>
+          <div class="actions"><button class="primary" type="submit">Run search</button></div>
+        </form>
+        <div id="search-summary" class="result-summary"></div>
+        <div id="search-results"></div>
+      </section>
+
+      <!-- ── get_property ──────────────────────────────────────────────── -->
+      <section data-panel="get" class="panel">
+        <div class="panel-head">
+          <h2>get_property</h2>
+          <p>Retrieve one listing by <span class="mono">raia_id</span>. Run a search first and click
+            <em>Get</em> on any row to fill this in.</p>
+        </div>
+        <form id="get-form" class="inline">
+          <label class="grow">raia_id <input name="raia_id" placeholder="prop-gb-rlf-04827193" /></label>
+          <button class="primary" type="submit">Get property</button>
+        </form>
+        <div id="get-result"></div>
+      </section>
+
+      <!-- ── create_enquiry ────────────────────────────────────────────── -->
+      <section data-panel="enquiry" class="panel">
+        <div class="panel-head">
+          <h2>create_enquiry <span class="tag-danger">writes data</span></h2>
+          <p>Submits an enquiry against a listing. This inserts a real row and forwards it to the source
+            agent — you'll be asked to confirm before it sends.</p>
+        </div>
+        <form id="enquiry-form" class="grid">
+          <label class="span2">raia_id <input name="raia_id" placeholder="prop-gb-rlf-04827193" required /></label>
+          <label>Name <input name="name" placeholder="Jane Doe" required /></label>
+          <label>Email <input name="email" type="email" placeholder="jane@example.com" required /></label>
+          <label>Phone <input name="phone" placeholder="+44 …" /></label>
+          <label>Preferred contact
+            <select name="preferred_contact">
+              <option value="">(none)</option>
+              <option>email</option><option>phone</option><option>whatsapp</option>
+            </select>
+          </label>
+          <label class="span2">Message <textarea name="message" rows="3" placeholder="Is this still available? Can we view it on Saturday?" required></textarea></label>
+          <label class="span2">Preferred viewing dates (comma-sep ISO, optional)
+            <input name="preferred_dates" placeholder="2026-06-21, 2026-06-22" /></label>
+          <label>Party size <input name="party_size" type="number" min="1" max="50" /></label>
+          <div class="actions"><button class="danger" type="submit">Send enquiry…</button></div>
+        </form>
+        <div id="enquiry-result"></div>
+      </section>
+
+      <!-- ── Conformance suite ─────────────────────────────────────────── -->
+      <section data-panel="suite" class="panel">
+        <div class="panel-head">
+          <h2>Conformance suite</h2>
+          <p>Runs a battery of protocol checks against the target: discovery, valid skill calls, and the
+            negative paths (not-found, unknown skill, bad params, missing DataPart, unknown method,
+            streaming rejection, malformed JSON, tasks/get). <strong>No writes</strong> —
+            <span class="mono">create_enquiry</span> is never called.</p>
+        </div>
+        <div class="actions">
+          <button id="run-suite" class="primary">Run all checks</button>
+          <span id="suite-tally" class="tally"></span>
+        </div>
+        <div id="suite-results"></div>
+      </section>
+    </main>
+
+    <!-- ── Wire log drawer ─────────────────────────────────────────────── -->
+    <div id="wire" class="wire collapsed">
+      <div id="wire-toggle" class="wire-bar" role="button" tabindex="0">
+        <span>Wire log</span>
+        <span id="wire-count" class="badge">0</span>
+        <span class="spacer"></span>
+        <span class="hint">raw JSON-RPC traffic</span>
+        <button id="wire-clear" class="ghost">clear</button>
+        <span id="wire-caret">▲</span>
+      </div>
+      <div id="wire-body" class="wire-body"></div>
+    </div>
+
+    <!-- Confirm modal for the one write path. -->
+    <div id="modal" class="modal hidden">
+      <div class="modal-box">
+        <h3>Send a real enquiry?</h3>
+        <p id="modal-text"></p>
+        <div class="modal-actions">
+          <button id="modal-cancel" class="ghost">Cancel</button>
+          <button id="modal-confirm" class="danger">Yes, send it</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

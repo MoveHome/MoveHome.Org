@@ -2,7 +2,7 @@
 
 > **Audience:** CRMs, agencies, and partners who **push property listings into
 > MoveHome.org** by calling this API. (If you are *implementing* the server, see
-> [`# RAIA Portal Feed API — Implementer's B.md`](./#%20RAIA%20Portal%20Feed%20API%20—%20Implementer's%20B.md).)
+> the [Implementer's Build Guide](./raia-portal-feed-build-guide.md).)
 >
 > <!-- AUTO-GENERATED from src/app/api/raia/portal/v1/** + src/app/oauth/token + src/lib/portal/** — keep in sync with the routes. -->
 

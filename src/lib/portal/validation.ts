@@ -1,5 +1,5 @@
 // Zod validation schemas for the RAIA Portal Feed API. Mirrors the field
-// reference in docs/# RAIA Portal Feed API — Implementer's B.md.
+// reference in docs/raia-portal-feed-build-guide.md.
 
 import { z } from 'zod';
 

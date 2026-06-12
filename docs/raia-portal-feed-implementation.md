@@ -1,7 +1,7 @@
 # RAIA Portal Feed API — MoveHome implementation notes
 
 This is the **server-side implementation** of the RAIA Portal Feed API spec
-(see `docs/# RAIA Portal Feed API — Implementer's B.md`). Providers (CRMs,
+(see the [Implementer's Build Guide](raia-portal-feed-build-guide.md)). Providers (CRMs,
 agencies, partners) push listings into MoveHome via these endpoints; once
 ingested, listings are mirrored into `tbl_external_raia_listings` and surface
 on the public site at `https://movehome.org/property/{raia_id}` alongside

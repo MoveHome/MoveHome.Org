@@ -1,8 +1,8 @@
 -- 0006_raia_portal_feed.sql
 --
 -- RAIA Portal Feed API — server-side schema. MoveHome acts as the *server*
--- exposed at /api/raia/portal/v1/* per docs/# RAIA Portal Feed API —
--- Implementer's B.md (draft v0.1.0). Providers (CRMs, agencies, partners)
+-- exposed at /api/raia/portal/v1/* per docs/raia-portal-feed-build-guide.md
+-- (draft v0.1.0). Providers (CRMs, agencies, partners)
 -- push listings via PUT /listings/{reference} using OAuth2 client_credentials
 -- bearer tokens.
 --
