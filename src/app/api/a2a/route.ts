@@ -16,6 +16,7 @@ import {
   JsonRpcTransportHandler
 } from '@a2a-js/sdk/server';
 import { buildAgentCard } from '@/lib/a2a/card';
+import { signAgentCard } from '@/lib/a2a/card-signing';
 import { moveHomeExecutor } from '@/lib/a2a/executor';
 import { enforceRateLimit, rateLimitHeaders } from '@/lib/portal/rate-limit';
 
@@ -28,16 +29,20 @@ const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Max-Age': '86400'
 };
 
-// Lazily built once per server instance (avoids reading env at build time).
-let transport: JsonRpcTransportHandler | null = null;
-function getTransport(): JsonRpcTransportHandler {
+// Lazily built once per server instance (avoids reading env at build time). The
+// card is signed (when a signing key is configured) so the SDK's card endpoint and
+// our GET serve the same verifiable card.
+let transport: Promise<JsonRpcTransportHandler> | null = null;
+function getTransport(): Promise<JsonRpcTransportHandler> {
   if (!transport) {
-    const handler = new DefaultRequestHandler(
-      buildAgentCard(),
-      new InMemoryTaskStore(),
-      moveHomeExecutor
-    );
-    transport = new JsonRpcTransportHandler(handler);
+    transport = (async () => {
+      const handler = new DefaultRequestHandler(
+        await signAgentCard(buildAgentCard()),
+        new InMemoryTaskStore(),
+        moveHomeExecutor
+      );
+      return new JsonRpcTransportHandler(handler);
+    })();
   }
   return transport;
 }
@@ -100,7 +105,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const result = await getTransport().handle(raw);
+    const result = await (await getTransport()).handle(raw);
     if (isAsyncGenerator(result)) {
       // Streaming (message/stream, tasks/resubscribe) is not supported.
       return json(rpcError(requestId(raw), -32004, 'Streaming is not supported; use message/send.'), 200, rl.headers);

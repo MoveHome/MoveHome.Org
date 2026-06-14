@@ -6,6 +6,7 @@
 
 import { NextResponse } from 'next/server';
 import { buildAgentCard } from '@/lib/a2a/card';
+import { signAgentCard } from '@/lib/a2a/card-signing';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,8 +20,8 @@ export function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS });
 }
 
-export function GET() {
-  return NextResponse.json(buildAgentCard(), {
+export async function GET() {
+  return NextResponse.json(await signAgentCard(buildAgentCard()), {
     status: 200,
     headers: { ...CORS, 'Cache-Control': 'public, max-age=300' }
   });
