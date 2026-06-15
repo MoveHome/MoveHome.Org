@@ -12,6 +12,7 @@ function EnquireForm() {
   const [phone, setPhone] = useState('');
   const [preferred, setPreferred] = useState<'email' | 'phone' | 'whatsapp'>('email');
   const [message, setMessage] = useState('');
+  const [company, setCompany] = useState(''); // honeypot — stays empty for real users
   const [status, setStatus] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
 
@@ -31,7 +32,8 @@ function EnquireForm() {
       body: JSON.stringify({
         raia_id,
         enquirer: { name, email, phone: phone || undefined, preferred_contact: preferred },
-        message
+        message,
+        company // honeypot; empty unless a bot filled the hidden field
       })
     });
 
@@ -63,6 +65,19 @@ function EnquireForm() {
       )}
 
       <form onSubmit={onSubmit} className="flex flex-col gap-4">
+        {/* Honeypot: hidden from real users (off-screen, not focusable, ignored by
+            autofill). A non-empty value on the server is treated as a bot. */}
+        <input
+          type="text"
+          name="company"
+          value={company}
+          onChange={(e) => setCompany(e.target.value)}
+          tabIndex={-1}
+          autoComplete="off"
+          aria-hidden="true"
+          style={{ position: 'absolute', left: '-9999px', width: '1px', height: '1px', opacity: 0 }}
+        />
+
         <label className="flex flex-col text-sm">
           <span className="text-slate-700 mb-1">Name</span>
           <input
