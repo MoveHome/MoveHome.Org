@@ -30,6 +30,14 @@ export type CreateEnquiryResult =
   | { ok: true; enquiry_id: string; status: 'received' }
   | { ok: false; httpStatus: number; error: string };
 
+// ── Anti-spam thresholds ───────────────────────────────────────────────────
+// Applied inside createEnquiry, so they protect BOTH the public form
+// (POST /api/enquire) and the A2A create_enquiry skill identically — neither
+// entry point can bypass them. Every check fails open: a counting error must
+// never turn away a legitimate enquirer.
+const DUP_WINDOW_MINUTES = 10; // same email + same listing within this window = duplicate
+const EMAIL_HOURLY_LIMIT = 20; // max enquiries per email address per rolling hour (across all listings)
+
 // SSRF guard for the agent-supplied enquiry_endpoint: only forward to public
 // HTTPS hosts. Blocks loopback / private / link-local IPs + cloud metadata so a
 // malicious listing can't make the server reach internal services.
@@ -100,6 +108,52 @@ export async function createEnquiry(input: CreateEnquiryInput): Promise<CreateEn
     return { ok: false, httpStatus: 404, error: 'Listing not found' };
   }
 
+  // Normalise the email once so storage and the abuse counters below agree
+  // (case/whitespace variants would otherwise dodge the per-sender limits).
+  const email = input.email.trim().toLowerCase();
+
+  // ── Anti-spam guards (best-effort; fail open) ──────────────────────────
+  try {
+    const now = Date.now();
+
+    // 1. Duplicate: same enquirer + same listing inside the dedup window.
+    //    Stops accidental double-submits and cheap repeat spam to one agent.
+    const dupSince = new Date(now - DUP_WINDOW_MINUTES * 60_000).toISOString();
+    const { count: dupCount } = await admin
+      .from('tbl_enquiries')
+      .select('enquiry_id', { count: 'exact', head: true })
+      .eq('raia_id', input.raia_id)
+      .eq('enquirer_email', email)
+      .gte('submitted_at', dupSince);
+    if ((dupCount ?? 0) > 0) {
+      return {
+        ok: false,
+        httpStatus: 429,
+        error: 'You already enquired about this listing in the last few minutes. Please wait before sending another.'
+      };
+    }
+
+    // 2. Volume: one email address across all listings per rolling hour.
+    //    Bounds a single actor spraying many listings; set well above normal
+    //    human browsing so genuine movers are never caught.
+    const hourSince = new Date(now - 60 * 60_000).toISOString();
+    const { count: emailCount } = await admin
+      .from('tbl_enquiries')
+      .select('enquiry_id', { count: 'exact', head: true })
+      .eq('enquirer_email', email)
+      .gte('submitted_at', hourSince);
+    if ((emailCount ?? 0) >= EMAIL_HOURLY_LIMIT) {
+      return {
+        ok: false,
+        httpStatus: 429,
+        error: 'Too many enquiries from this email address in the last hour. Please try again later.'
+      };
+    }
+  } catch (e) {
+    // A failed counter must not block a legitimate enquiry — log and continue.
+    console.error('[enquiry] abuse check failed (allowing)', e instanceof Error ? e.message : e);
+  }
+
   // ── Compose enquiry.json v0.2 payload ──────────────────────────────────
   const enquiry_id = randomUUID();
   const submitted_at = new Date().toISOString();
@@ -117,7 +171,7 @@ export async function createEnquiry(input: CreateEnquiryInput): Promise<CreateEn
     raia_id: input.raia_id,
     enquirer: {
       name: input.name,
-      email: input.email,
+      email,
       ...(phone ? { phone } : {}),
       ...(preferred_contact ? { preferred_contact } : {})
     },
@@ -134,7 +188,7 @@ export async function createEnquiry(input: CreateEnquiryInput): Promise<CreateEn
     agent_id: listing.agent_id,
     user_id: input.userId ?? null,
     enquirer_name: input.name,
-    enquirer_email: input.email,
+    enquirer_email: email,
     enquirer_phone: phone,
     preferred_contact,
     message: input.message,
