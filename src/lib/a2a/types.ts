@@ -3,6 +3,7 @@
 
 export type {
   AgentCard,
+  AgentCardSignature,
   AgentSkill,
   AgentCapabilities,
   AgentProvider,

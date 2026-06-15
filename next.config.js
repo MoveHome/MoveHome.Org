@@ -5,7 +5,9 @@ const nextConfig = {
     return [
       // A2A Agent Card discovery at the spec well-known locations.
       { source: '/.well-known/agent.json', destination: '/api/agent-card' },
-      { source: '/.well-known/agent-card.json', destination: '/api/agent-card' }
+      { source: '/.well-known/agent-card.json', destination: '/api/agent-card' },
+      // JWKS for verifying the signed Agent Card (jku target).
+      { source: '/.well-known/jwks.json', destination: '/api/jwks' }
     ];
   },
   // Baseline security headers (no CSP — a strict policy needs per-page testing
