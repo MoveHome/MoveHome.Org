@@ -25,7 +25,7 @@ export function buildAgentCard(): AgentCard {
       organization: 'Move Home Organisation CIC',
       url: SITE_URL
     },
-    documentationUrl: `${SITE_URL}/docs/raia-a2a-api`,
+    documentationUrl: `${SITE_URL}/skills.md`,
     capabilities: {
       streaming: false,
       pushNotifications: false,
