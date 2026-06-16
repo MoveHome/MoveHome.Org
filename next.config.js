@@ -7,7 +7,9 @@ const nextConfig = {
       { source: '/.well-known/agent.json', destination: '/api/agent-card' },
       { source: '/.well-known/agent-card.json', destination: '/api/agent-card' },
       // JWKS for verifying the signed Agent Card (jku target).
-      { source: '/.well-known/jwks.json', destination: '/api/jwks' }
+      { source: '/.well-known/jwks.json', destination: '/api/jwks' },
+      // llms.txt convention — alias to the AI-agent integration guide.
+      { source: '/llms.txt', destination: '/skills.md' }
     ];
   },
   // Baseline security headers (no CSP — a strict policy needs per-page testing
