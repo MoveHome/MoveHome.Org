@@ -123,7 +123,8 @@ async function verifySignature(card: ParsedCard): Promise<boolean> {
     for (const sig of sigs) {
       const hdr = JSON.parse(Buffer.from(sig.protected, 'base64url').toString('utf8')) as { jku?: string; alg?: string };
       if (!hdr.jku || !isForwardableEndpoint(hdr.jku)) return false; // SSRF guard on jku
-      const res = await fetch(hdr.jku, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+      // redirect:'manual' so the jku can't 3xx to an internal host past the guard.
+      const res = await fetch(hdr.jku, { redirect: 'manual', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
       if (!res.ok) return false;
       const jwks = (await res.json()) as { keys?: Record<string, unknown>[] };
       if (!Array.isArray(jwks.keys) || jwks.keys.length === 0) return false;
@@ -153,10 +154,15 @@ export async function fetchAndValidateCard(wellKnownURI: string): Promise<Ingest
     res = await fetch(uri, {
       headers: { Accept: 'application/json' },
       signal: AbortSignal.timeout(FETCH_TIMEOUT_MS),
-      redirect: 'follow'
+      // Do NOT follow redirects: a public URL could 3xx to an internal host and
+      // bypass the isForwardableEndpoint guard (SSRF). Any redirect is rejected.
+      redirect: 'manual'
     });
   } catch {
     return fail(502, 'Could not fetch the agent card from wellKnownURI.');
+  }
+  if (res.status >= 300 && res.status < 400) {
+    return fail(400, 'wellKnownURI must point directly at the agent card; redirects are not followed (SSRF protection).');
   }
   if (!res.ok) return fail(502, `Agent card fetch returned HTTP ${res.status}.`);
 
