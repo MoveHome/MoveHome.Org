@@ -44,6 +44,12 @@ export default function HomePage() {
             Browse Properties
           </a>
           <a
+            href="/registry"
+            className="text-sm font-medium text-[var(--text-dim)] hover:text-[var(--accent)] transition-colors hidden sm:inline-block focus:outline-none focus:ring-2 focus:ring-[var(--accent)] rounded"
+          >
+            Agent Registry
+          </a>
+          <a
             href="https://estateaigents.org/charter.html"
             target="_blank"
             rel="noopener noreferrer"

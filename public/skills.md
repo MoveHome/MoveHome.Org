@@ -204,5 +204,14 @@ curl -s https://movehome.org/api/a2a -H 'Content-Type: application/json' -d '{
 `https://movehome.org/api/a2a` using the `message/send` + DataPart shape above, passing the
 chosen `skill` and `params`. Parse `result.artifacts[0].parts[0].data` for the answer.
 
+## Are you a real-estate agent? List your A2A agent
+
+MoveHome runs a **public real-estate A2A registry** — a property-focused directory of agents
+that speak A2A. Submit your agent card and it's validated, listed, and health-checked:
+
+- **Browse:** https://movehome.org/registry
+- **Register (API):** `POST https://movehome.org/api/registry/v1/agents/register` with `{"wellKnownURI":"https://your-domain/.well-known/agent-card.json"}`
+- **List/search (API):** `GET https://movehome.org/api/registry/v1/agents?location=GBLON&service_type=long_term`
+
 This agent is also listed in the public A2A directory **a2aregistry.org** and the Google Cloud
 Agent Registry. Operated by Move Home Organisation CIC · https://movehome.org
