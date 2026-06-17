@@ -24,7 +24,7 @@ async function probe(row: HealthDueRow): Promise<ProbeResult> {
   let cardOk = false;
   if (isForwardableEndpoint(row.well_known_uri)) {
     try {
-      const r = await fetch(row.well_known_uri, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+      const r = await fetch(row.well_known_uri, { redirect: 'manual', signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
       cardOk = r.ok;
     } catch {
       cardOk = false;
@@ -39,6 +39,7 @@ async function probe(row: HealthDueRow): Promise<ProbeResult> {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jsonrpc: '2.0', id: 'health-probe', method: 'tasks/get', params: { id: 'health-probe-nonexistent' } }),
+        redirect: 'manual',
         signal: AbortSignal.timeout(PROBE_TIMEOUT_MS)
       });
       const body = (await r.json()) as { jsonrpc?: string; error?: unknown; result?: unknown };
