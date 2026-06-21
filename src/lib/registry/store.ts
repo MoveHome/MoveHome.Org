@@ -83,6 +83,7 @@ export interface ListFilters {
   location?: string;
   serviceType?: string;
   category?: string;
+  skill?: string;
   healthyOnly?: boolean;
   limit: number;
   offset: number;
@@ -93,6 +94,7 @@ export async function listAgents(f: ListFilters): Promise<{ agents: PublicRegist
   if (f.location) q = q.contains('locations', [f.location]);
   if (f.serviceType) q = q.contains('service_types', [f.serviceType]);
   if (f.category) q = q.contains('categories', [f.category]);
+  if (f.skill) q = q.contains('skills', [{ id: f.skill }]); // jsonb @> [{"id":…}]
   if (f.healthyOnly) q = q.eq('is_healthy', true);
   if (f.search) {
     const s = safeSearch(f.search);
@@ -106,6 +108,54 @@ export async function getAgent(idOrSlug: string): Promise<PublicRegistryAgent | 
   const col = /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(idOrSlug) ? 'id' : 'slug';
   const { data } = await table('vw_a2a_registry_public').select('*').eq(col, idOrSlug).maybeSingle();
   return (data as PublicRegistryAgent | null) ?? null;
+}
+
+// Full machine-readable export — every listed agent, no pagination (bulk index).
+export async function listAllAgents(max = 1000): Promise<PublicRegistryAgent[]> {
+  const { data } = await table('vw_a2a_registry_public')
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(max);
+  return (data as PublicRegistryAgent[]) ?? [];
+}
+
+export interface RegistryStats {
+  total: number;
+  healthy: number;
+  signed: number;
+  categories: { name: string; count: number }[];
+  service_types: { name: string; count: number }[];
+  locations: { name: string; count: number }[];
+}
+
+interface StatsRow {
+  is_healthy: boolean | null;
+  signature_verified: boolean;
+  categories: string[] | null;
+  service_types: string[] | null;
+  locations: string[] | null;
+}
+
+export async function getStats(): Promise<RegistryStats> {
+  const { data } = await table('vw_a2a_registry_public')
+    .select('is_healthy, signature_verified, categories, service_types, locations')
+    .limit(5000);
+  const rows = (data as StatsRow[]) ?? [];
+
+  const tally = (pick: (r: StatsRow) => string[] | null): { name: string; count: number }[] => {
+    const m = new Map<string, number>();
+    for (const r of rows) for (const v of pick(r) ?? []) m.set(v, (m.get(v) ?? 0) + 1);
+    return [...m.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count);
+  };
+
+  return {
+    total: rows.length,
+    healthy: rows.filter((r) => r.is_healthy === true).length,
+    signed: rows.filter((r) => r.signature_verified).length,
+    categories: tally((r) => r.categories).slice(0, 20),
+    service_types: tally((r) => r.service_types),
+    locations: tally((r) => r.locations).slice(0, 30)
+  };
 }
 
 // Re-sync an existing agent's card fields from its well-known URI. Returns the
