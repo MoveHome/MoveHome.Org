@@ -35,6 +35,7 @@ export async function GET(req: Request) {
       location: url.searchParams.get('location')?.toUpperCase() || undefined,
       serviceType: url.searchParams.get('service_type') || undefined,
       category: url.searchParams.get('category') || undefined,
+      skill: url.searchParams.get('skill') || undefined,
       healthyOnly: url.searchParams.get('healthy') === 'true',
       limit,
       offset

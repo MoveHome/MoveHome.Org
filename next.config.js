@@ -9,7 +9,9 @@ const nextConfig = {
       // JWKS for verifying the signed Agent Card (jku target).
       { source: '/.well-known/jwks.json', destination: '/api/jwks' },
       // llms.txt convention — alias to the AI-agent integration guide.
-      { source: '/llms.txt', destination: '/skills.md' }
+      { source: '/llms.txt', destination: '/skills.md' },
+      // Machine-readable bulk export of the public A2A registry.
+      { source: '/registry.json', destination: '/api/registry/v1/all' }
     ];
   },
   // Baseline security headers (no CSP — a strict policy needs per-page testing

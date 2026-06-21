@@ -3,7 +3,7 @@
 // text (React-escaped); no dangerouslySetInnerHTML anywhere.
 
 import Link from 'next/link';
-import { listAgents } from '@/lib/registry/store';
+import { listAgents, getStats } from '@/lib/registry/store';
 import { healthBadge, hostOf } from '@/lib/registry/ui';
 import type { PublicRegistryAgent } from '@/lib/registry/types';
 
@@ -61,6 +61,7 @@ export default async function RegistryPage({
     offset: (page - 1) * PAGE_SIZE
   });
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const stats = await getStats();
 
   return (
     <main className="max-w-6xl mx-auto px-4 py-10">
@@ -70,10 +71,19 @@ export default async function RegistryPage({
           A public directory of property agents that speak the Agent2Agent (A2A) protocol — discoverable,
           health-checked, and conformance-rated. Built by MoveHome.org.
         </p>
-        <div className="mt-3 flex gap-3 text-sm">
+        <div className="mt-3 flex flex-wrap gap-3 text-sm">
           <Link href="/registry/submit" className="text-primary underline">Register your agent →</Link>
           <a href="/api/registry/v1/agents" className="text-primary underline">API</a>
+          <a href="/registry.json" className="text-primary underline">registry.json</a>
           <a href="/skills.md" className="text-primary underline">Integration guide</a>
+        </div>
+        <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-sm text-[var(--text-dim)]">
+          <span><strong className="text-[var(--text)]">{stats.total}</strong> agents</span>
+          <span><strong className="text-[var(--text)]">{stats.healthy}</strong> healthy</span>
+          <span><strong className="text-[var(--text)]">{stats.signed}</strong> signed</span>
+          {stats.categories.length ? (
+            <span className="text-[var(--text-faint)]">top: {stats.categories.slice(0, 4).map((c) => c.name).join(', ')}</span>
+          ) : null}
         </div>
       </header>
 
