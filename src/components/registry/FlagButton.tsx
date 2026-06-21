@@ -18,10 +18,10 @@ export default function FlagButton({ agentId }: { agentId: string }) {
     }
   }
 
-  if (state === 'done') return <span className="text-xs text-gray-500">Flag recorded — our team will review. Thank you.</span>;
+  if (state === 'done') return <span className="text-xs text-[var(--text-faint)]">Flag recorded — our team will review. Thank you.</span>;
   if (state === 'error') return <span className="text-xs text-red-500">Could not record the flag. Please try again later.</span>;
   return (
-    <button onClick={flag} disabled={state === 'sending'} className="text-xs text-gray-500 underline hover:text-gray-700">
+    <button onClick={flag} disabled={state === 'sending'} className="text-xs text-[var(--text-faint)] underline hover:text-[var(--text-dim)]">
       {state === 'sending' ? 'Sending…' : 'Flag this listing'}
     </button>
   );

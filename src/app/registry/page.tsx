@@ -23,22 +23,22 @@ function AgentTile({ a }: { a: PublicRegistryAgent }) {
   return (
     <Link
       href={`/registry/${a.slug}`}
-      className="block rounded-lg border border-gray-200 dark:border-gray-700 p-4 hover:border-primary transition-colors"
+      className="block rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-4 hover:border-[var(--accent)] transition-colors"
     >
       <div className="flex items-start justify-between gap-2">
-        <h2 className="font-semibold text-lg leading-tight">{a.name || a.slug}</h2>
-        {a.signature_verified ? <span title="Signed agent card" className="text-primary text-sm">✓ signed</span> : null}
+        <h2 className="font-semibold text-lg leading-tight text-[var(--text)]">{a.name || a.slug}</h2>
+        {a.signature_verified ? <span title="Signed agent card" className="text-[var(--accent)] text-sm">✓ signed</span> : null}
       </div>
-      {a.provider_org ? <p className="text-sm text-gray-500 mt-0.5">{a.provider_org}</p> : null}
-      {a.description ? <p className="text-sm mt-2 line-clamp-3">{a.description}</p> : null}
+      {a.provider_org ? <p className="text-sm text-[var(--text-dim)] mt-0.5">{a.provider_org}</p> : null}
+      {a.description ? <p className="text-sm mt-2 line-clamp-3 text-[var(--text-dim)]">{a.description}</p> : null}
       <div className="flex flex-wrap gap-1.5 mt-3">
         {(a.categories ?? []).slice(0, 4).map((c) => (
-          <span key={c} className="text-xs px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800">{c}</span>
+          <span key={c} className="text-xs px-2 py-0.5 rounded bg-[var(--bg-elev)] text-[var(--text-dim)]">{c}</span>
         ))}
       </div>
       <div className="flex items-center justify-between mt-3 text-xs">
         <span className={`px-2 py-0.5 rounded ${badge.cls}`}>{badge.text}</span>
-        <span className="text-gray-500">{skillCount} skill{skillCount === 1 ? '' : 's'} · {hostOf(a.a2a_url) ?? '—'}</span>
+        <span className="text-[var(--text-faint)]">{skillCount} skill{skillCount === 1 ? '' : 's'} · {hostOf(a.a2a_url) ?? '—'}</span>
       </div>
     </Link>
   );
@@ -66,7 +66,7 @@ export default async function RegistryPage({
     <main className="max-w-6xl mx-auto px-4 py-10">
       <header className="mb-6">
         <h1 className="text-3xl font-semibold">Real-Estate A2A Agent Registry</h1>
-        <p className="text-gray-600 dark:text-gray-400 mt-2 max-w-2xl">
+        <p className="text-[var(--text-dim)] mt-2 max-w-2xl">
           A public directory of property agents that speak the Agent2Agent (A2A) protocol — discoverable,
           health-checked, and conformance-rated. Built by MoveHome.org.
         </p>
@@ -78,19 +78,19 @@ export default async function RegistryPage({
       </header>
 
       <form method="get" className="grid sm:grid-cols-5 gap-2 mb-6">
-        <input name="q" defaultValue={sp.q ?? ''} placeholder="Search name / description" className="sm:col-span-2 border rounded px-3 py-2 bg-transparent" />
-        <input name="location" defaultValue={sp.location ?? ''} placeholder="UN/LOCODE (GBLON)" className="border rounded px-3 py-2 bg-transparent" />
-        <select name="service_type" defaultValue={sp.service_type ?? ''} className="border rounded px-3 py-2 bg-transparent">
+        <input name="q" defaultValue={sp.q ?? ''} placeholder="Search name / description" className="sm:col-span-2 border border-[var(--border)] rounded px-3 py-2 bg-transparent" />
+        <input name="location" defaultValue={sp.location ?? ''} placeholder="UN/LOCODE (GBLON)" className="border border-[var(--border)] rounded px-3 py-2 bg-transparent" />
+        <select name="service_type" defaultValue={sp.service_type ?? ''} className="border border-[var(--border)] rounded px-3 py-2 bg-transparent">
           <option value="">Any service</option>
           {SERVICE_TYPES.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
         <button type="submit" className="rounded bg-primary text-white px-4 py-2">Filter</button>
       </form>
 
-      <p className="text-sm text-gray-500 mb-4">{total} agent{total === 1 ? '' : 's'} listed</p>
+      <p className="text-sm text-[var(--text-faint)] mb-4">{total} agent{total === 1 ? '' : 's'} listed</p>
 
       {agents.length === 0 ? (
-        <p className="text-gray-500">No agents match. <Link href="/registry/submit" className="text-primary underline">Register the first one.</Link></p>
+        <p className="text-[var(--text-faint)]">No agents match. <Link href="/registry/submit" className="text-primary underline">Register the first one.</Link></p>
       ) : (
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {agents.map((a) => <AgentTile key={a.id} a={a} />)}
@@ -103,7 +103,7 @@ export default async function RegistryPage({
             const p = i + 1;
             const qs = new URLSearchParams({ ...(sp as Record<string, string>), page: String(p) }).toString();
             return (
-              <Link key={p} href={`/registry?${qs}`} className={`px-3 py-1 rounded border ${p === page ? 'bg-primary text-white' : ''}`}>{p}</Link>
+              <Link key={p} href={`/registry?${qs}`} className={`px-3 py-1 rounded border border-[var(--border)] ${p === page ? 'bg-primary text-white' : ''}`}>{p}</Link>
             );
           })}
         </nav>

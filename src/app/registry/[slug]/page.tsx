@@ -23,8 +23,8 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex gap-3 py-1.5 border-b border-gray-100 dark:border-gray-800 text-sm">
-      <span className="w-40 shrink-0 text-gray-500">{label}</span>
+    <div className="flex gap-3 py-1.5 border-b border-[var(--border)] text-sm">
+      <span className="w-40 shrink-0 text-[var(--text-dim)]">{label}</span>
       <span className="min-w-0 break-words">{children}</span>
     </div>
   );
@@ -49,7 +49,7 @@ export default async function AgentDetailPage({ params }: { params: Promise<{ sl
       <header className="mt-3 flex items-start justify-between gap-3">
         <div>
           <h1 className="text-3xl font-semibold">{a.name || a.slug}</h1>
-          {a.provider_org ? <p className="text-gray-500 mt-1">{a.provider_org}</p> : null}
+          {a.provider_org ? <p className="text-[var(--text-dim)] mt-1">{a.provider_org}</p> : null}
         </div>
         <div className="flex flex-col items-end gap-1 text-xs">
           <span className={`px-2 py-0.5 rounded ${badge.cls}`}>{badge.text}</span>
@@ -75,12 +75,12 @@ export default async function AgentDetailPage({ params }: { params: Promise<{ sl
         <h2 className="text-xl font-semibold mb-2">Skills ({skills.length})</h2>
         <div className="space-y-3">
           {skills.map((s) => (
-            <div key={s.id} className="rounded border border-gray-200 dark:border-gray-700 p-3">
-              <div className="font-medium">{s.name || s.id} <span className="text-xs text-gray-500 font-mono">{s.id}</span></div>
+            <div key={s.id} className="rounded border border-[var(--border)] p-3">
+              <div className="font-medium">{s.name || s.id} <span className="text-xs text-[var(--text-dim)] font-mono">{s.id}</span></div>
               {s.description ? <p className="text-sm mt-1">{s.description}</p> : null}
               {s.tags?.length ? (
                 <div className="flex flex-wrap gap-1.5 mt-2">
-                  {s.tags.slice(0, 10).map((t) => <span key={t} className="text-xs px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800">{t}</span>)}
+                  {s.tags.slice(0, 10).map((t) => <span key={t} className="text-xs px-2 py-0.5 rounded bg-[var(--bg-elev)] text-[var(--text-dim)]">{t}</span>)}
                 </div>
               ) : null}
             </div>
@@ -88,7 +88,7 @@ export default async function AgentDetailPage({ params }: { params: Promise<{ sl
         </div>
       </section>
 
-      <section className="mt-6 text-sm text-gray-600 dark:text-gray-400">
+      <section className="mt-6 text-sm text-[var(--text-dim)]">
         <h2 className="text-xl font-semibold mb-2 text-current">Health &amp; conformance</h2>
         <Row label="Conformance">{a.task_conformance?.category ?? 'unchecked'}</Row>
         <Row label="Uptime">{a.uptime_percentage != null ? `${a.uptime_percentage}%` : '—'}</Row>
