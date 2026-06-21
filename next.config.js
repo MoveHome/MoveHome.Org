@@ -11,7 +11,9 @@ const nextConfig = {
       // llms.txt convention — alias to the AI-agent integration guide.
       { source: '/llms.txt', destination: '/skills.md' },
       // Machine-readable bulk export of the public A2A registry.
-      { source: '/registry.json', destination: '/api/registry/v1/all' }
+      { source: '/registry.json', destination: '/api/registry/v1/all' },
+      // Clean URL for the hosted property MCP server.
+      { source: '/mcp', destination: '/api/mcp' }
     ];
   },
   // Baseline security headers (no CSP — a strict policy needs per-page testing
