@@ -30,11 +30,11 @@ export interface HealthBadge {
 
 export function healthBadge(a: Pick<PublicRegistryAgent, 'is_healthy' | 'uptime_percentage'>): HealthBadge {
   if (a.is_healthy === null || a.is_healthy === undefined) {
-    return { text: 'unchecked', cls: 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300' };
+    return { text: 'unchecked', cls: 'bg-[var(--bg-elev)] text-[var(--text-dim)]' };
   }
   if (a.is_healthy) {
     const up = a.uptime_percentage != null ? ` · ${a.uptime_percentage}% uptime` : '';
-    return { text: `healthy${up}`, cls: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' };
+    return { text: `healthy${up}`, cls: 'bg-[var(--tint-light)] text-[var(--accent-hover)]' };
   }
-  return { text: 'unhealthy', cls: 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300' };
+  return { text: 'unhealthy', cls: 'bg-[var(--bg-elev)] text-red-600 font-medium' };
 }
