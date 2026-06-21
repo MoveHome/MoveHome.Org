@@ -94,7 +94,9 @@ export async function listAgents(f: ListFilters): Promise<{ agents: PublicRegist
   if (f.location) q = q.contains('locations', [f.location]);
   if (f.serviceType) q = q.contains('service_types', [f.serviceType]);
   if (f.category) q = q.contains('categories', [f.category]);
-  if (f.skill) q = q.contains('skills', [{ id: f.skill }]); // jsonb @> [{"id":…}]
+  // skills is jsonb (not text[]), so pass a JSON string → PostgREST `cs` = jsonb @>.
+  // (A JS array would be serialized as a Postgres array literal and never match.)
+  if (f.skill) q = q.contains('skills', JSON.stringify([{ id: f.skill }]));
   if (f.healthyOnly) q = q.eq('is_healthy', true);
   if (f.search) {
     const s = safeSearch(f.search);
