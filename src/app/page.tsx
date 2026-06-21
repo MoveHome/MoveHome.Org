@@ -134,7 +134,7 @@ export default function HomePage() {
               <ul className="text-xs text-[var(--text-dim)] space-y-1.5 mb-6">
                 <li className="flex items-center gap-2"><span className="text-[var(--accent)]">✓</span> Google A2A endpoint — live at <code className="text-[var(--accent)]">/.well-known/agent.json</code></li>
                 <li className="flex items-center gap-2"><span className="text-[var(--accent)]">✓</span> Search, get, and enquire skills over JSON-RPC</li>
-                <li className="flex items-center gap-2"><span className="text-[var(--text-dim)]">◷</span> MCP server for property discovery — coming next</li>
+                <li className="flex items-center gap-2"><span className="text-[var(--accent)]">✓</span> MCP server — live at <code className="text-[var(--accent)]">/mcp</code></li>
               </ul>
             </div>
             <a
@@ -143,6 +143,12 @@ export default function HomePage() {
             >
               View our Agent Card
               <span className="text-xs">↗</span>
+            </a>
+            <a
+              href="/skills.md"
+              className="mt-3 text-xs text-center text-[var(--text-dim)] hover:text-[var(--accent)] underline transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--accent)] rounded"
+            >
+              Read the AI integration guide (/skills.md) →
             </a>
           </div>
 
