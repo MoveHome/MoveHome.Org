@@ -88,19 +88,22 @@ function toPublicListing(l: Listing) {
 // ── search_properties ─────────────────────────────────────────────────────
 const searchSchema = z
   .object({
+    // Clients send lowercase/padded codes in practice; normalise before matching.
     un_locode: z
       .string()
+      .trim()
+      .toUpperCase()
       .regex(/^[A-Z]{2}[A-Z0-9]{3}$/, 'un_locode must be a 5-char UN/LOCODE, e.g. GBLON')
       .optional(),
     service_type: z.enum(['long_term', 'short_term', 'sale']).optional(),
     property_type: z.enum(['flat', 'house', 'studio', 'commercial', 'land', 'other']).optional(),
     bedrooms_min: z.number().int().min(0).max(50).optional(),
     bedrooms_max: z.number().int().min(0).max(50).optional(),
-    rent_pcm_max: z.number().min(0).optional(),
-    asking_price_max: z.number().min(0).optional(),
-    features: z.array(z.string().max(60)).max(20).optional(),
+    rent_pcm_max: z.number().finite().min(0).max(1_000_000).optional(),
+    asking_price_max: z.number().finite().min(0).max(1_000_000_000).optional(),
+    features: z.array(z.string().trim().min(1).max(60)).max(20).optional(),
     limit: z.number().int().min(1).max(50).optional(),
-    offset: z.number().int().min(0).optional()
+    offset: z.number().int().min(0).max(10_000).optional()
   })
   .strict();
 

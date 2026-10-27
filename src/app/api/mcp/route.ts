@@ -42,12 +42,12 @@ const TOOLS: McpTool[] = [
   skillTool('search_properties', 'search_properties', 'Search the MoveHome.org property catalogue by location (UN/LOCODE), service type, property type, bedrooms, and max price.', {
     type: 'object',
     properties: {
-      un_locode: { type: 'string', description: '5-char UN/LOCODE, e.g. GBLON' },
+      un_locode: { type: 'string', pattern: '^[A-Za-z]{2}[A-Za-z0-9]{3}$', description: '5-char UN/LOCODE, e.g. GBLON (case-insensitive)' },
       service_type: { type: 'string', enum: ['long_term', 'short_term', 'sale'] },
       property_type: { type: 'string', enum: ['flat', 'house', 'studio', 'commercial', 'land', 'other'] },
-      bedrooms_min: { type: 'integer', minimum: 0 },
-      rent_pcm_max: { type: 'number' },
-      asking_price_max: { type: 'number' },
+      bedrooms_min: { type: 'integer', minimum: 0, maximum: 50 },
+      rent_pcm_max: { type: 'number', minimum: 0, maximum: 1000000 },
+      asking_price_max: { type: 'number', minimum: 0, maximum: 1000000000 },
       limit: { type: 'integer', minimum: 1, maximum: 50 }
     }
   }),
