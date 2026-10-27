@@ -10,6 +10,8 @@
 - **Agent Card:** `https://movehome.org/.well-known/agent-card.json`  (machine-readable capabilities)
 - **Protocol:** A2A `0.3.0`, transport `JSONRPC`. CORS is open (`*`). Auth: **none** (anonymous).
 - **This doc:** `https://movehome.org/skills.md`
+- **MCP server (Claude, ChatGPT, any MCP client):** `https://movehome.org/mcp` (Streamable HTTP, no auth)
+- **Claude connector manifest:** `https://movehome.org/.well-known/claude-connector.json`
 
 ---
 
@@ -203,6 +205,31 @@ curl -s https://movehome.org/api/a2a -H 'Content-Type: application/json' -d '{
 **Register as a tool in your agent** — define one tool, e.g. `movehome_property`, that POSTs to
 `https://movehome.org/api/a2a` using the `message/send` + DataPart shape above, passing the
 chosen `skill` and `params`. Parse `result.artifacts[0].parts[0].data` for the answer.
+
+## Connect from Claude (custom connector)
+
+MoveHome.org runs a hosted **MCP server**, so Claude can call `search_properties` and
+`get_property` as native tools. No API key, no install. The two read-only skills above are
+exposed as MCP tools; `create_enquiry` stays A2A-only (it emails a real agent) — call it with the
+JSON-RPC shape earlier in this doc if the user explicitly asks to enquire.
+
+- **MCP endpoint:** `https://movehome.org/mcp` (Streamable HTTP, `GET` returns server info, `POST` is JSON-RPC)
+- **Manifest:** `https://movehome.org/.well-known/claude-connector.json`
+
+**Claude Web / Claude Desktop:**
+1. Settings → **Connectors** → **Add custom connector**.
+2. Name: `MoveHome.org` — URL: `https://movehome.org/mcp`.
+3. Save, then in a chat enable the connector and ask e.g. *"2-bed flats to rent in London under £3000 pcm"*.
+
+**Any other MCP client** (server name `movehome-property`, transport `streamable-http`, auth none):
+```json
+{ "mcpServers": { "movehome": { "type": "http", "url": "https://movehome.org/mcp" } } }
+```
+
+Check it is live:
+```bash
+curl -s https://movehome.org/mcp | head -c 400
+```
 
 ## Are you a real-estate agent? List your A2A agent
 
