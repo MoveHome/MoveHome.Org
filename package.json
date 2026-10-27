@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": false,
   "license": "MIT",
-  "description": "movehome.org — reference open-source RAIA Protocol consumer. Not-for-profit property listing aggregator.",
+  "description": "movehome.org \u2014 reference open-source RAIA Protocol consumer. Not-for-profit property listing aggregator.",
   "homepage": "https://movehome.org",
   "repository": {
     "type": "git",
@@ -16,7 +16,8 @@
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "portal:create-credential": "node scripts/portal-create-credential.cjs"
+    "portal:create-credential": "node scripts/portal-create-credential.cjs",
+    "test": "vitest run"
   },
   "dependencies": {
     "@a2a-js/sdk": "^0.3.13",
@@ -40,6 +41,7 @@
     "eslint-config-next": "^15.5.18",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
-    "typescript": "^5.7.0"
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.4"
   }
 }
