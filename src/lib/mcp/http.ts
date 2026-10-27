@@ -6,6 +6,7 @@
 import { NextResponse } from 'next/server';
 import { createHash } from 'node:crypto';
 import { enforceRateLimit, type EndpointGroup } from '@/lib/portal/rate-limit';
+import { parseRpc } from './rpc';
 
 const MCP_CORS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -30,13 +31,6 @@ export interface McpServerInfo {
   version: string;
   instructions?: string;
   rateLimitGroup: EndpointGroup;
-}
-
-interface JsonRpcMsg {
-  jsonrpc?: string;
-  method?: string;
-  id?: unknown;
-  params?: Record<string, unknown>;
 }
 
 function ipKey(req: Request): string {
@@ -75,18 +69,21 @@ export async function handleMcp(req: Request, server: McpServerInfo, tools: McpT
     /* limiter unavailable — fail open */
   }
 
-  let msg: JsonRpcMsg;
+  let body: unknown;
   try {
-    msg = (await req.json()) as JsonRpcMsg;
+    body = await req.json();
   } catch {
     return rpc(fail(null, -32700, 'Parse error.'));
   }
-  if (Array.isArray(msg)) return rpc(fail(null, -32600, 'Batch requests are not supported.'));
 
-  const { method, id, params } = msg;
+  // Envelope errors carry HTTP 200 per JSON-RPC 2.0 (the error lives in the body).
+  const parsed = parseRpc(body);
+  if (!parsed.ok) return rpc(fail(parsed.id, parsed.code, parsed.message));
+
+  const { method, id, params } = parsed.msg;
 
   // Notifications (no id, e.g. notifications/initialized) — ack with 202, no body.
-  if (typeof method === 'string' && msg.id === undefined) {
+  if (id === undefined) {
     return new NextResponse(null, { status: 202, headers: MCP_CORS });
   }
 
