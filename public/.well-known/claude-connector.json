@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "name": "MoveHome.org",
+  "display_name": "MoveHome.org Property Search",
+  "description": "Search UK and international property listings and inspect full listing details. Read-only. Operated by Move Home Organisation CIC, a not-for-profit aggregator.",
+  "version": "1.0.0",
+  "publisher": {
+    "name": "Move Home Organisation CIC",
+    "url": "https://movehome.org",
+    "contact": "admin@movehome.org"
+  },
+  "documentation": "https://movehome.org/skills.md",
+  "icon": "https://movehome.org/branding/icon.png",
+  "categories": ["real_estate", "property", "search"],
+  "server": {
+    "type": "mcp",
+    "transport": "streamable-http",
+    "url": "https://movehome.org/mcp",
+    "authentication": "none"
+  },
+  "tools": [
+    {
+      "name": "search_properties",
+      "description": "Search the MoveHome.org property catalogue by UN/LOCODE location, service type, property type, bedrooms, and max price."
+    },
+    {
+      "name": "get_property",
+      "description": "Fetch the full public details of one listing by its raia_id."
+    }
+  ],
+  "links": {
+    "a2a_endpoint": "https://movehome.org/api/a2a",
+    "agent_card": "https://movehome.org/.well-known/agent-card.json",
+    "registry": "https://movehome.org/registry"
+  },
+  "license": "Apache-2.0"
+}
