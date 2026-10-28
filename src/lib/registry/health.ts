@@ -3,33 +3,49 @@
 //   2. conformance — does the A2A endpoint speak JSON-RPC? We send `tasks/get` for a
 //      nonexistent id, which a conformant agent answers with a JSON-RPC envelope and
 //      which has NO side effects (it never invokes a skill like create_enquiry).
+//   3. trust — re-verify the card's signature against its same-host JWKS, and the
+//      _raia-verify DNS TXT record against the agent's token. Either failing clears
+//      that flag (drops the agent out of the verified tier); it is never delisted for it.
 // Probes run concurrently with per-request timeouts; results go to store.recordHealth.
 
 import { isForwardableEndpoint } from '@/lib/enquiry';
+import { verifyCardSignature } from './ingest';
+import { checkDomainTxt, type TxtResolver } from './domain';
 import { agentsDueForHealthCheck, recordHealth, type HealthDueRow } from './store';
 import type { TaskConformance } from './types';
 
 const PROBE_TIMEOUT_MS = 8_000;
+const CARD_MAX_BYTES = 100_000;
 const DEFAULT_BATCH = 25;
 
-interface ProbeResult {
+export interface ProbeResult {
   ok: boolean;
   responseMs: number | null;
   conformance: TaskConformance;
+  /** Undefined when the card could not be fetched — the stored flag is left as it was. */
+  signatureVerified?: boolean;
+  domainVerified: boolean;
 }
 
-async function probe(row: HealthDueRow): Promise<ProbeResult> {
+export async function probe(row: HealthDueRow, resolveTxt?: TxtResolver): Promise<ProbeResult> {
   const start = Date.now();
 
   let cardOk = false;
+  let card: unknown = null;
   if (isForwardableEndpoint(row.well_known_uri)) {
     try {
       const r = await fetch(row.well_known_uri, { redirect: 'manual', signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
       cardOk = r.ok;
+      if (r.ok) {
+        const text = await r.text();
+        card = text.length <= CARD_MAX_BYTES ? JSON.parse(text) : null;
+      }
     } catch {
-      cardOk = false;
+      card = null; // unreachable or not JSON: liveness already recorded via cardOk
     }
   }
+  const signatureVerified = card ? await verifyCardSignature(card, row.well_known_uri) : undefined;
+  const domainVerified = await checkDomainTxt(row.well_known_uri, row.verification_token, resolveTxt);
 
   let category: TaskConformance['category'] = 'UNKNOWN';
   let passed = false;
@@ -57,7 +73,9 @@ async function probe(row: HealthDueRow): Promise<ProbeResult> {
   return {
     ok,
     responseMs,
-    conformance: { category: ok ? 'WORKING' : category, passed, checked_at: new Date().toISOString(), response_ms: responseMs }
+    conformance: { category: ok ? 'WORKING' : category, passed, checked_at: new Date().toISOString(), response_ms: responseMs },
+    signatureVerified,
+    domainVerified
   };
 }
 

@@ -1,5 +1,5 @@
 // Registry ingestion: fetch a submitted A2A Agent Card, validate it, confirm it's
-// a real-estate agent, derive search facets, verify its signature (best-effort),
+// a real-estate agent, derive search facets, verify its signature,
 // and normalise it into an insertable row. Shared by the register API (Lane A) and
 // the health worker / re-sync (Lane C).
 //
@@ -110,25 +110,38 @@ function deriveLocations(card: ParsedCard): string[] | null {
   return found.size ? Array.from(found).slice(0, 50) : null;
 }
 
-// Best-effort JWS verification of a signed card against its jku JWKS. Returns false
-// on any problem (no signature, unreachable/unsafe jku, mismatch). Never throws.
-async function verifySignature(card: ParsedCard): Promise<boolean> {
-  const sigs = card.signatures;
+// JWS verification of a signed card against its jku JWKS (RFC 8785 JCS payload,
+// detached). Returns false on any problem; never throws. Every signature must verify,
+// and each must be bound to the card's own host:
+//   - jku must be served from the same host as the card, so a card cannot vouch for
+//     itself with a key set someone else controls;
+//   - the key is selected by the header's kid (a lone key is accepted only when the
+//     header names no kid), never "whatever key happens to be first".
+// Shared by ingest (register / re-sync) and the health worker's re-verification.
+export async function verifyCardSignature(card: unknown, cardUrl: string): Promise<boolean> {
+  if (!card || typeof card !== 'object') return false;
+  const { signatures: sigs, ...unsigned } = card as Record<string, unknown> & { signatures?: unknown };
   if (!Array.isArray(sigs) || sigs.length === 0) return false;
   try {
-    const { signatures: _omit, ...unsigned } = card as Record<string, unknown> & { signatures?: unknown };
+    const cardHost = new URL(cardUrl).hostname;
     const jcs = canonicalize(unsigned);
     if (!jcs) return false;
     const payloadB64 = Buffer.from(jcs, 'utf8').toString('base64url');
-    for (const sig of sigs) {
-      const hdr = JSON.parse(Buffer.from(sig.protected, 'base64url').toString('utf8')) as { jku?: string; alg?: string };
+    for (const sig of sigs as { protected?: unknown; signature?: unknown }[]) {
+      if (typeof sig?.protected !== 'string' || typeof sig?.signature !== 'string') return false;
+      const hdr = JSON.parse(Buffer.from(sig.protected, 'base64url').toString('utf8')) as {
+        jku?: string; alg?: string; kid?: string;
+      };
       if (!hdr.jku || !isForwardableEndpoint(hdr.jku)) return false; // SSRF guard on jku
+      if (new URL(hdr.jku).hostname !== cardHost) return false;
       // redirect:'manual' so the jku can't 3xx to an internal host past the guard.
       const res = await fetch(hdr.jku, { redirect: 'manual', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
       if (!res.ok) return false;
       const jwks = (await res.json()) as { keys?: Record<string, unknown>[] };
-      if (!Array.isArray(jwks.keys) || jwks.keys.length === 0) return false;
-      const key = await importJWK(jwks.keys[0], hdr.alg || 'ES256');
+      const keys = Array.isArray(jwks.keys) ? jwks.keys : [];
+      const jwk = hdr.kid ? keys.find((k) => k.kid === hdr.kid) : keys.length === 1 ? keys[0] : undefined;
+      if (!jwk) return false;
+      const key = await importJWK(jwk, hdr.alg || 'ES256');
       await flattenedVerify({ protected: sig.protected, payload: payloadB64, signature: sig.signature }, key);
     }
     return true;
@@ -209,7 +222,7 @@ export async function fetchAndValidateCard(wellKnownURI: string): Promise<Ingest
     icon_url: card.iconUrl ?? null,
     documentation_url: card.documentationUrl ?? null,
     raw_card: card,
-    signature_verified: await verifySignature(card),
+    signature_verified: await verifyCardSignature(card, uri.toString()),
     locations: deriveLocations(card),
     service_types: deriveServiceTypes(haystack),
     categories,
