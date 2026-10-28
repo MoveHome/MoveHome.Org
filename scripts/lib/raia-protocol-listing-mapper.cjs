@@ -65,6 +65,20 @@ function asObjectOrNull(v) {
   return v;
 }
 
+// MoveHome's property_type column is a closed enum
+// (flat | house | studio | commercial | land | other) while RAIA stores free
+// text ("Flat", "apartment", ...). Lower-case, then bucket anything outside the
+// enum as other — the column cannot hold the detail and inventing a category
+// would be worse than the honest bucket.
+const PROPERTY_TYPE_ENUM = new Set(["flat", "house", "studio", "commercial", "land", "other"]);
+
+function normalisePropertyType(v) {
+  const s = asTrimmedStringOrNull(v);
+  if (!s) return null;
+  const lower = s.toLowerCase();
+  return PROPERTY_TYPE_ENUM.has(lower) ? lower : "other";
+}
+
 function postcodeSector(full) {
   if (!full) return null;
   const m = String(full).toUpperCase().match(POSTCODE_FULL_RE);
@@ -171,7 +185,7 @@ function normaliseListing(listing, ctx) {
     headline:              asTrimmedStringOrNull(listing.headline),
     marketing_description: asTrimmedStringOrNull(listing.marketing_description),
 
-    property_type:    asTrimmedStringOrNull(listing.property_type),
+    property_type:    normalisePropertyType(listing.property_type),
     service_type,
     bedrooms:         asIntOrNull(listing.bedrooms),
     bathrooms:        asIntOrNull(listing.bathrooms),
@@ -235,6 +249,7 @@ function normaliseListing(listing, ctx) {
 
 module.exports = {
   normaliseListing,
+  normalisePropertyType,
   postcodeSector,
   postcodeDistrict,
   locationWkt,
