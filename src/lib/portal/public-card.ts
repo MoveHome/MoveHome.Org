@@ -146,10 +146,12 @@ export async function upsertPublicCard(args: DeriveArgs): Promise<DerivedCard | 
   let asking_price: number | null = null;
   let currency: string | null = null;
   if (payload.kind === 'residential') {
+    // Absent price stays null: a Let Agreed card is price-less (owner decision
+    // 2026-10-28) and 0 would render as a real, wrong asking rent.
     if (payload.transaction_type === 'LETTINGS') {
-      rent_pcm = Math.round(payload.asking_rent_pcm ?? 0);
+      rent_pcm = payload.asking_rent_pcm != null ? Math.round(payload.asking_rent_pcm) : null;
     } else {
-      asking_price = Math.round(payload.asking_price ?? 0);
+      asking_price = payload.asking_price != null ? Math.round(payload.asking_price) : null;
     }
     currency = payload.currency ?? null;
   } else {
