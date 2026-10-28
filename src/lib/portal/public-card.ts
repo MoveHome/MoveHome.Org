@@ -167,7 +167,11 @@ export async function upsertPublicCard(args: DeriveArgs): Promise<DerivedCard | 
     }
   }
 
-  // Media
+  const admin = createSupabaseAdminClient();
+
+  // Media. A provider PUT replaces the photo set, but must not silently drop
+  // cache columns the wire payload does not carry (floor plans, featured image),
+  // so the existing media object is merged under the new one.
   const media =
     payload.kind === 'residential' ? payload.media ?? null : payload.building.media ?? null;
   const photo_url =
@@ -177,8 +181,36 @@ export async function upsertPublicCard(args: DeriveArgs): Promise<DerivedCard | 
   const photo_count =
     media && Array.isArray(media.photos) ? media.photos.length : null;
 
+  let existingMedia: Record<string, unknown> = {};
+  if (photo_url) {
+    const prior = await admin
+      .from('tbl_external_raia_listings')
+      .select('media')
+      .eq('agent_id', args.agent_id)
+      .eq('raia_id', raia_id)
+      .maybeSingle();
+    const priorMedia = prior.data?.media;
+    if (priorMedia && typeof priorMedia === 'object' && !Array.isArray(priorMedia)) {
+      existingMedia = priorMedia as Record<string, unknown>;
+    }
+  }
+
   const features =
     payload.kind === 'residential' ? payload.features ?? null : null;
+
+  // The cache's furnishing vocabulary is narrower than the feed enum; a value
+  // it cannot hold is left NULL rather than coerced into a wrong one.
+  const CACHE_FURNISHING: Record<string, string> = {
+    FURNISHED: 'furnished',
+    PART_FURNISHED: 'part_furnished',
+    UNFURNISHED: 'unfurnished'
+  };
+  const furnishing =
+    payload.kind === 'residential' && payload.furnishing
+      ? CACHE_FURNISHING[payload.furnishing] ?? null
+      : null;
+  const available_from =
+    payload.kind === 'residential' ? payload.available_from ?? null : null;
 
   const bedrooms =
     payload.kind === 'residential' ? payload.bedrooms ?? null : null;
@@ -189,8 +221,6 @@ export async function upsertPublicCard(args: DeriveArgs): Promise<DerivedCard | 
   const display_address = suppress ? null : address.display_address;
   const postcode = address.postcode;
   const street_name = suppress ? null : extractStreet(address.display_address);
-
-  const admin = createSupabaseAdminClient();
 
   const upsertBody = {
     agent_id: args.agent_id,
@@ -216,12 +246,15 @@ export async function upsertPublicCard(args: DeriveArgs): Promise<DerivedCard | 
     listing_status,
     visibility: 'public',
     features,
-    media: (media ?? null) as Json,
+    media: (media ? { ...existingMedia, ...media, featured_image_url: photo_url } : null) as Json,
     photo_url,
     photo_count,
+    // ADR-427 field contract: furnishing/availability are source populates for
+    // every eligible listing and must survive the feed projection.
+    furnishing: furnishing,
+    available_from: available_from,
     last_seen_at: new Date().toISOString(),
     withdrawn_at: null,
-    enquiry_endpoint: null,
     jurisdiction_extensions: (suppress
       ? null
       : {

@@ -33,6 +33,7 @@ const path = require("node:path");
 const { createClient } = require("@supabase/supabase-js");
 const { normaliseListing } = require("./lib/raia-protocol-listing-mapper.cjs");
 const { checkParity, changedFields, newStats, countGap } = require("./lib/movehome-feed-parity.cjs");
+const { writeTelemetry, touchBookkeeping } = require("./lib/feed-run-guards.cjs");
 
 // ── Env ───────────────────────────────────────────────────────────────────────
 const envLocal = path.join(__dirname, "..", ".env.local");
@@ -99,28 +100,6 @@ async function loadCanonical(raiaIds) {
   return out;
 }
 
-async function writeTelemetry(stats, startedAt) {
-  const { error } = await raia.from("tbl_pipeline_runs").insert({
-    pipeline: "movehome_feed_backfill",
-    run_at: new Date(startedAt).toISOString(),
-    status: stats.failed > 0 ? "partial" : "success",
-    records_new: stats.succeeded,
-    records_total: stats.attempted,
-    breakdown: {
-      mode: WRITE ? "write" : "dry_run",
-      attempted: stats.attempted,
-      succeeded: stats.succeeded,
-      failed: stats.failed,
-      unchanged: stats.unchanged,
-      ineligible: stats.ineligible,
-      withdrawn: stats.withdrawn,
-      source_gaps: stats.gaps,
-      failures: stats.failures.slice(0, 50),
-    },
-  });
-  if (error) console.error(`  telemetry insert failed: ${error.message}`);
-}
-
 async function main() {
   const startedAt = Date.now();
   console.log(`\nMOVEHOME CACHE BACKFILL (ADR-427) | mode=${WRITE ? "WRITE" : "DRY RUN"}`);
@@ -174,9 +153,15 @@ async function main() {
     if (contentChanged.length === 0) {
       stats.unchanged++;
       if (WRITE && changed.length) {
-        await cache.from("tbl_external_raia_listings")
-          .update({ last_seen_at: mapped.row.last_seen_at, synced_at: mapped.row.synced_at })
-          .eq("agent_id", current.agent_id).eq("raia_id", current.raia_id);
+        // A failed "seen now" stamp means the row was NOT touched: report it as
+        // a failure rather than as unchanged.
+        const stampErr = await touchBookkeeping(cache, current, mapped.row);
+        if (stampErr) {
+          stats.failed++;
+          stats.failures.push({ raia_id: current.raia_id, reason: `bookkeeping: ${stampErr}` });
+          report.push({ raia_id: current.raia_id, outcome: "failed", reason: `bookkeeping: ${stampErr}` });
+          continue;
+        }
       }
       report.push({ raia_id: current.raia_id, outcome: "unchanged", bookkeeping_only: changed.length > 0 });
       continue;
@@ -203,7 +188,18 @@ async function main() {
     report.push({ raia_id: current.raia_id, outcome: "written", columns: contentChanged });
   }
 
-  await writeTelemetry(stats, startedAt);
+  const telemetryErr = await writeTelemetry(raia, {
+    pipeline: "movehome_feed_backfill",
+    stats,
+    startedAt,
+    mode: WRITE ? "write" : "dry_run",
+  });
+  if (telemetryErr) {
+    console.error(`  telemetry insert failed: ${telemetryErr}`);
+    // A gated --write run without its tbl_pipeline_runs audit record is not a
+    // successful run, whatever it wrote.
+    if (WRITE) stats.failed++;
+  }
 
   const gapSummary = Object.entries(stats.gaps).map(([k, v]) => `${k}=${v}`).join(" ") || "none";
   console.log(`\n  attempted=${stats.attempted} written=${stats.succeeded} unchanged=${stats.unchanged} ineligible=${stats.ineligible} failed=${stats.failed}`);
