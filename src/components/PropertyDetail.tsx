@@ -32,6 +32,11 @@ export default function PropertyDetail({ listing }: { listing: Listing }) {
         <p className="text-slate-500 mt-1 text-sm">
           {[listing.suburb, listing.postcode_district].filter(Boolean).join(', ')}
         </p>
+        {listing.listing_status && listing.listing_status !== 'available' && (
+          <span className="mt-3 inline-block rounded-full border border-[var(--border)] bg-[var(--bg-elev)] px-2.5 py-1 text-xs font-semibold capitalize text-[var(--text)]">
+            {listing.listing_status.replace(/_/g, ' ')}
+          </span>
+        )}
         <p className="text-xl font-semibold text-primary mt-3">{formatPrice(listing)}</p>
       </header>
 

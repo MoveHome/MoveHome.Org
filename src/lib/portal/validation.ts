@@ -195,7 +195,13 @@ export const ResidentialListing = ResidentialBase.superRefine((d, ctx) => {
       path: ['asking_price']
     });
   }
-  if (d.transaction_type === 'LETTINGS' && d.asking_rent_pcm === undefined) {
+  // Owner decision 2026-10-28: a Let Agreed card is published price-less, so its
+  // asking rent is genuinely absent and must not be invented to satisfy a schema.
+  if (
+    d.transaction_type === 'LETTINGS' &&
+    d.asking_rent_pcm === undefined &&
+    d.status !== 'LET_AGREED'
+  ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'asking_rent_pcm is required when transaction_type=LETTINGS.',
