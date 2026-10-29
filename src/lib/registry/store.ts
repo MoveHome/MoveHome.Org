@@ -4,6 +4,7 @@
 // public view (vw_a2a_registry_public); writes hit the base table (service-role).
 
 import { createSupabaseAdminClient } from '@/lib/supabase-admin';
+import { newVerificationToken } from './domain';
 import type { IngestedCard, PublicRegistryAgent } from './types';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- intentional type erasure
@@ -203,11 +204,12 @@ export interface HealthDueRow {
   id: string;
   well_known_uri: string;
   a2a_url: string | null;
+  verification_token: string | null;
 }
 
 export async function agentsDueForHealthCheck(limit: number): Promise<HealthDueRow[]> {
   const { data } = await table('tbl_a2a_registry')
-    .select('id, well_known_uri, a2a_url')
+    .select('id, well_known_uri, a2a_url, verification_token')
     .eq('status', 'listed')
     .order('last_health_check', { ascending: true, nullsFirst: true })
     .limit(limit);
@@ -216,7 +218,16 @@ export async function agentsDueForHealthCheck(limit: number): Promise<HealthDueR
 
 export async function recordHealth(
   id: string,
-  result: { ok: boolean; responseMs: number | null; conformance: unknown; detail?: unknown }
+  result: {
+    ok: boolean;
+    responseMs: number | null;
+    conformance: unknown;
+    detail?: unknown;
+    /** Re-verified this run; omitted when the card could not be fetched (state kept). */
+    signatureVerified?: boolean;
+    /** Re-verified this run against the agent's DNS TXT token. */
+    domainVerified?: boolean;
+  }
 ): Promise<void> {
   await table('tbl_a2a_registry_health_log').insert({
     agent_id: id,
@@ -245,7 +256,63 @@ export async function recordHealth(
       avg_response_ms: result.responseMs,
       uptime_percentage: Math.round(uptime * 100) / 100,
       consecutive_failures: result.ok ? 0 : prevFails + 1,
-      task_conformance: result.conformance
+      task_conformance: result.conformance,
+      ...verificationUpdate(result)
     })
     .eq('id', id);
+}
+
+// Column updates for a verification re-check. Failing either check clears the flag
+// (the agent drops out of the verified tier) but never deletes or delists it.
+function verificationUpdate(r: { signatureVerified?: boolean; domainVerified?: boolean }): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (r.signatureVerified !== undefined) out.signature_verified = r.signatureVerified;
+  if (r.domainVerified !== undefined) {
+    out.domain_verified = r.domainVerified;
+    if (r.domainVerified) {
+      out.verified_at = new Date().toISOString();
+      out.verification_method = 'dns';
+    }
+  }
+  return out;
+}
+
+// ── domain verification (RAIA SPEC §7) ─────────────────────────────────────
+export interface VerificationTarget {
+  id: string;
+  slug: string;
+  well_known_uri: string;
+  verification_token: string;
+}
+
+/**
+ * The agent's DNS TXT token, issuing one if it has none. Never replaces an existing
+ * token (a second caller cannot invalidate a record the operator already published);
+ * the conditional update makes concurrent first calls converge on one token.
+ */
+export async function ensureVerificationToken(idOrSlug: string): Promise<VerificationTarget | null> {
+  const isUuid = /^[0-9a-f-]{36}$/i.test(idOrSlug);
+  const read = async () => {
+    const { data } = await table('tbl_a2a_registry')
+      .select('id, slug, well_known_uri, verification_token')
+      .eq(isUuid ? 'id' : 'slug', idOrSlug)
+      .eq('status', 'listed')
+      .maybeSingle();
+    return data as (Omit<VerificationTarget, 'verification_token'> & { verification_token: string | null }) | null;
+  };
+  const row = await read();
+  if (!row) return null;
+  if (row.verification_token) return row as VerificationTarget;
+  const { error } = await table('tbl_a2a_registry')
+    .update({ verification_token: newVerificationToken() })
+    .eq('id', row.id)
+    .is('verification_token', null);
+  if (error) throw new Error(`verification token issue failed: ${error.message}`);
+  const issued = await read();
+  return issued?.verification_token ? (issued as VerificationTarget) : null;
+}
+
+export async function recordDomainCheck(id: string, domainVerified: boolean): Promise<void> {
+  const { error } = await table('tbl_a2a_registry').update(verificationUpdate({ domainVerified })).eq('id', id);
+  if (error) throw new Error(`domain verification update failed: ${error.message}`);
 }
