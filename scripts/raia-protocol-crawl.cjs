@@ -86,6 +86,11 @@ function db() {
   return sb;
 }
 
+// Test seam: swap the client so the upsert contract is exercised in-memory.
+function setClient(client) {
+  sb = client;
+}
+
 // ─── Logging ────────────────────────────────────────────────────────────────
 
 const ts = () => new Date().toISOString().slice(11, 19);
@@ -633,7 +638,7 @@ async function main() {
   return 0;
 }
 
-module.exports = { buildSearchRequest, extractItems, collectSearchPages, isJsonRpcCard };
+module.exports = { buildSearchRequest, extractItems, collectSearchPages, isJsonRpcCard, upsertListing, setClient };
 
 if (require.main === module) {
   if (!SUPABASE_URL || !SUPABASE_KEY) {
