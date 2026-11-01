@@ -102,15 +102,18 @@ All params optional; omit to browse broadly. Schema is strict (unknown keys reje
   "total": 128, "count": 5, "offset": 0, "limit": 5,
   "listings": [
     {
-      "raia_id": "prop-gb-rlf-000031",
-      "url": "https://movehome.org/property/prop-gb-rlf-000031",
-      "headline": "Latymer Court",
+      "raia_id": "prop-gb-rlf-000427",
+      "url": "https://movehome.org/property/prop-gb-rlf-000427",
+      "headline": "2-bed flat, Mill Hill NW7",
       "property_type": "flat", "service_type": "long_term", "status": "available",
-      "bedrooms": 2, "bathrooms": 1,
-      "price": { "rent_pcm": 2750, "asking_price": null, "currency": "GBP" },
-      "location": { "un_locode": "GBLON", "postcode_district": "W6", "latitude": 51.49, "longitude": -0.22 },
-      "features": ["balcony", "lift"],
-      "media": { "photo_url": "https://…", "photos": ["https://…"] }
+      "bedrooms": 2, "bathrooms": 2,
+      "price": { "rent_pcm": 2271, "asking_price": null, "currency": "GBP" },
+      "location": { "un_locode": "GBLON", "postcode_district": "NW7", "latitude": 51.618257, "longitude": -0.220432 },
+      "features": ["balcony", "dishwasher"],
+      "media": {
+        "photo_url": "https://…",
+        "photos": [ { "url": "https://…", "order": 0 }, { "url": "https://…", "order": 1 } ]
+      }
     }
     // … more
   ]
@@ -121,13 +124,13 @@ All params optional; omit to browse broadly. Schema is strict (unknown keys reje
 
 | Param | Type | Notes |
 |---|---|---|
-| `raia_id` | string | required, e.g. `prop-gb-rlf-000031` (get it from a search result) |
+| `raia_id` | string | required, e.g. `prop-gb-rlf-000427` (get it from a search result) |
 
 **Example:**
 ```json
 { "jsonrpc": "2.0", "id": 2, "method": "message/send", "params": { "message": {
   "kind": "message", "role": "user", "messageId": "g1",
-  "parts": [ { "kind": "data", "data": { "skill": "get_property", "params": { "raia_id": "prop-gb-rlf-000031" } } } ]
+  "parts": [ { "kind": "data", "data": { "skill": "get_property", "params": { "raia_id": "prop-gb-rlf-000427" } } } ]
 } } }
 ```
 **Result** — artifact `property`, `data`: `{ "listing": { … same shape as a search listing … } }`.
@@ -154,7 +157,7 @@ Only call it with the user's explicit consent and their real contact details. No
 { "jsonrpc": "2.0", "id": 3, "method": "message/send", "params": { "message": {
   "kind": "message", "role": "user", "messageId": "e1",
   "parts": [ { "kind": "data", "data": { "skill": "create_enquiry", "params": {
-    "raia_id": "prop-gb-rlf-000031",
+    "raia_id": "prop-gb-rlf-000427",
     "enquirer": { "name": "Jane Doe", "email": "jane@example.com", "preferred_contact": "email" },
     "message": "Is this still available? Could we view it on Saturday?",
     "viewing_request": { "preferred_dates": ["2026-06-20"], "party_size": 2 }
