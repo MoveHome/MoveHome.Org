@@ -7,6 +7,19 @@ name: RAIA Protocol federated crawl
 #   - Every 4 hours: standard crawl (only stale agents).
 #   - Daily 02:00 UTC: --validate-cards re-fetches every approved agent's
 #     card so we catch unreachable/abandoned agents.
+#
+# Failure alerting (in-repo):
+#   - A "Preflight secrets" step fails fast, with an explicit ::error:: naming
+#     the missing secrets, before any dependency install.
+#   - Any failure opens or updates a GitHub Issue titled
+#     "[crawl] federated crawl failing" using the automatic GITHUB_TOKEN.
+#
+# IMPORTANT — GitHub disables a scheduled workflow automatically after 60 days
+# of repository inactivity, and the schedule then never runs again, so the
+# in-repo alerting above can never fire in that state. An external host-side
+# watchdog (independent of this repository and of GitHub Actions) covers that
+# gap and pages a human when the crawl stops producing runs.
+# After re-enabling a disabled workflow, run:  gh workflow enable 273355693
 
 on:
   schedule:
@@ -31,6 +44,10 @@ on:
         default: 'false'
         required: false
 
+permissions:
+  contents: read
+  issues: write
+
 jobs:
   crawl:
     runs-on: ubuntu-latest
@@ -44,10 +61,28 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
+      # Fail in ~5s with a clear annotation instead of a bare exit 3 from the
+      # crawler. Runs before `npm install` on purpose.
+      - name: Preflight secrets
+        id: preflight
+        env:
+          NEXT_PUBLIC_SUPABASE_URL:  ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          missing=""
+          [ -n "$NEXT_PUBLIC_SUPABASE_URL" ]  || missing="$missing NEXT_PUBLIC_SUPABASE_URL"
+          [ -n "$SUPABASE_SERVICE_ROLE_KEY" ] || missing="$missing SUPABASE_SERVICE_ROLE_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required repository secret(s):$missing. The federated crawl cannot run until they are set (Settings > Secrets and variables > Actions). See open issue '[crawl] federated crawl failing' (card t_2f55a30d). After the secrets are added, re-enable if needed: gh workflow enable 273355693"
+            exit 1
+          fi
+          echo "Required secrets are present."
+
       - name: Install dependencies
         run: npm install --omit=dev --ignore-scripts
 
       - name: Run RAIA Protocol crawl
+        id: crawl
         env:
           NEXT_PUBLIC_SUPABASE_URL:  ${{ secrets.NEXT_PUBLIC_SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -80,3 +115,29 @@ jobs:
 
           echo "Running: node scripts/raia-protocol-crawl.cjs $ARGS"
           node scripts/raia-protocol-crawl.cjs $ARGS
+
+      # Opens one issue, or comments on the existing open one. Uses the
+      # automatic GITHUB_TOKEN, so no extra repository secret is required.
+      - name: Open or update failure issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          title='[crawl] federated crawl failing'
+          failed="unknown"
+          [ "${{ steps.preflight.outcome }}" = "failure" ] && failed="Preflight secrets"
+          [ "${{ steps.crawl.outcome }}" = "failure" ] && failed="Run RAIA Protocol crawl"
+
+          body=$(printf 'Federated crawl failed.\n\n- Run: %s\n- Run id: %s\n- Conclusion: %s\n- Failed step: %s\n- Event: %s\n\nRe-run from the Actions tab once the cause is fixed. No secret values are included in this issue.' \
+            "$RUN_URL" "${{ github.run_id }}" "${{ job.status }}" "$failed" "${{ github.event_name }}")
+
+          existing=$(gh issue list --state open --limit 100 --json number,title \
+            --jq '[.[] | select(.title=="'"$title"'")][0].number // empty')
+
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi
