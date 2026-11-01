@@ -3,11 +3,16 @@
  * scripts/raia-protocol-crawl.cjs — RAIA Protocol federated crawl for MoveHome.org.
  *
  * For every approved row in `tbl_raia_agent_registry`, fetches the agent card
- * (`/.well-known/raia-agent.json`), validates it against schemas/agent-card.json
- * v0.2, calls the agent's `endpoints.search`, fetches each individual listing
- * via `endpoints.property` with `{raia_id}` substituted, validates against
- * schemas/listing.json v0.2, normalises via lib/raia-protocol-listing-mapper.cjs,
- * and UPSERTs into `tbl_external_raia_listings`.
+ * and validates it against schemas/agent-card.json v0.2, searches the agent and
+ * validates each listing against schemas/listing.json v0.2, normalises via
+ * lib/raia-protocol-listing-mapper.cjs, and UPSERTs into
+ * `tbl_external_raia_listings`.
+ *
+ * Two card shapes are supported:
+ *   - flat A2A v0.2 card (`preferredTransport: "JSONRPC"` + `url`): JSON-RPC 2.0
+ *     `message/send` POST to that url, invoking skill `search_properties`
+ *   - legacy card (`endpoints.search` / `endpoints.property`): anonymous GET,
+ *     one request per listing via the `{raia_id}` placeholder
  *
  * USAGE:
  *   node scripts/raia-protocol-crawl.cjs                 # dry run, all approved agents
@@ -48,11 +53,6 @@ const SUPABASE_URL  = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABA
 const SUPABASE_KEY  = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const GITHUB_RUN_ID = process.env.GITHUB_RUN_ID ?? null;
 
-if (!SUPABASE_URL || !SUPABASE_KEY) {
-  console.error("❌  Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
-  process.exit(3);
-}
-
 const ARGS           = process.argv.slice(2);
 const WRITE_MODE     = ARGS.includes("--write");
 const DRY_RUN        = !WRITE_MODE || ARGS.includes("--dry-run");
@@ -71,11 +71,20 @@ const FETCH_TIMEOUT_LISTING_MS  = 15_000;
 const MAX_REDIRECTS             = 3;
 const PER_AGENT_LISTING_CAP     = 1000;
 const PER_LISTING_CONCURRENCY   = 4;
+const MAX_PAGINATED_ITEMS       = 10_000;
 const STALE_AFTER_MISSED_CRAWLS = 3;
 
-const sb = createClient(SUPABASE_URL, SUPABASE_KEY, {
-  auth: { persistSession: false, autoRefreshToken: false },
-});
+// Lazy: the module must be requireable from tests without Supabase env.
+let sb = null;
+function db() {
+  if (!sb) {
+    if (!SUPABASE_URL || !SUPABASE_KEY) throw new Error("Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
+    sb = createClient(SUPABASE_URL, SUPABASE_KEY, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+  }
+  return sb;
+}
 
 // ─── Logging ────────────────────────────────────────────────────────────────
 
@@ -104,6 +113,9 @@ function validateAgentCard(card) {
     errors.push("agent card is not an object");
     return errors;
   }
+  // Flat A2A cards carry protocolVersion + url, not RAIA agent_id/schema_version/endpoints;
+  // identity comes from the registry row.
+  if (isJsonRpcCard(card)) return errors;
   for (const f of (AGENT_CARD_SCHEMA.required ?? [])) {
     if (!(f in card)) errors.push(`missing required field: ${f}`);
   }
@@ -114,6 +126,8 @@ function validateAgentCard(card) {
   if (!checkPattern(card.agent_id, "^org-[a-z]{2}-[a-z0-9-]{2,32}$")) {
     errors.push(`agent_id failed pattern: ${card.agent_id}`);
   }
+  // Flat A2A v0.2 cards advertise a JSON-RPC url instead of endpoints.*
+  if (isJsonRpcCard(card)) return errors;
   const ep = card.endpoints;
   if (!ep || typeof ep !== "object") {
     errors.push("endpoints object missing");
@@ -155,7 +169,9 @@ function validateListing(listing) {
 
 // ─── HTTP fetch with timeout + redirects ───────────────────────────────────
 
-async function fetchJson(url, { timeoutMs, label }) {
+const CRAWLER_UA = "movehome-protocol-crawler/0.1 (+https://movehome.org)";
+
+async function fetchJson(url, { timeoutMs, label, method = "GET", headers = {}, body = null }) {
   let currentUrl = url;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
     const controller = new AbortController();
@@ -163,13 +179,16 @@ async function fetchJson(url, { timeoutMs, label }) {
     let resp;
     try {
       resp = await fetch(currentUrl, {
-        method:   "GET",
+        method,
         redirect: "manual",
         signal:   controller.signal,
         headers: {
-          "User-Agent": "movehome-protocol-crawler/0.1 (+https://movehome.org)",
+          "User-Agent": CRAWLER_UA,
           "Accept":     "application/json",
+          ...(body == null ? {} : { "Content-Type": "application/json" }),
+          ...headers,
         },
+        ...(body == null ? {} : { body: JSON.stringify(body) }),
       });
     } catch (e) {
       clearTimeout(timer);
@@ -181,6 +200,10 @@ async function fetchJson(url, { timeoutMs, label }) {
     clearTimeout(timer);
 
     if (resp.status >= 300 && resp.status < 400) {
+      // A redirected JSON-RPC POST would lose its body; treat it as a protocol error.
+      if (method !== "GET") {
+        throw Object.assign(new Error(`${label} ${resp.status} redirect on ${method}`), { code: "redirect" });
+      }
       const loc = resp.headers.get("location");
       if (!loc) throw Object.assign(new Error(`${label} ${resp.status} no Location header`), { code: "redirect" });
       currentUrl = new URL(loc, currentUrl).toString();
@@ -202,11 +225,127 @@ async function fetchJson(url, { timeoutMs, label }) {
   throw Object.assign(new Error(`${label} too many redirects`), { code: "redirect" });
 }
 
+// ─── Search request building (pure — unit-tested) ───────────────────────────
+
+const PAGE_LIMIT = 50;  // A2A search skill caps limit at 50
+const ITEM_KEYS  = ["properties", "results", "listings"];
+
+function isJsonRpcCard(card) {
+  return card?.preferredTransport === "JSONRPC" &&
+    typeof card.url === "string" && /^https?:\/\//.test(card.url);
+}
+
+/**
+ * Pure: no fetch, no clock, no env reads. Returns { url, method, headers, body }.
+ * `credentials` is { token } or null — anonymous is the default.
+ */
+function buildSearchRequest(card, params = {}, credentials = null) {
+  const headers = {
+    "User-Agent": CRAWLER_UA,
+    "Accept":     "application/json",
+    ...(credentials?.token ? { Authorization: `Bearer ${credentials.token}` } : {}),
+  };
+
+  if (isJsonRpcCard(card)) {
+    const { offset: _offset, ...skillParams } = params;
+    return {
+      url:    card.url,
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: {
+        jsonrpc: "2.0",
+        id:      `movehome-crawl-${params.offset ?? 0}`,
+        method:  "message/send",
+        params:  {
+          message: {
+            role:      "user",
+            kind:      "message",
+            messageId: `movehome-crawl-${params.offset ?? 0}`,
+            parts:     [{ kind: "data", data: { skill: "search_properties", params: skillParams } }],
+          },
+        },
+      },
+    };
+  }
+
+  const url = new URL(card.endpoints.search);
+  for (const [k, v] of Object.entries(params)) if (v != null) url.searchParams.set(k, String(v));
+  return { url: url.toString(), method: "GET", headers, body: null };
+}
+
+/** JSON-RPC task result → the skill's data object (throws on a failed/error task). */
+function jsonRpcData(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  if (payload.error) {
+    throw Object.assign(new Error(`jsonrpc error ${payload.error.code}: ${payload.error.message}`), { code: "schema_invalid" });
+  }
+  const result = payload.result;
+  if (!result || typeof result !== "object") return null;
+  const parts = [
+    ...(Array.isArray(result.artifacts) ? result.artifacts.flatMap(a => a?.parts ?? []) : []),
+    ...(result.status?.message?.parts ?? []),
+  ];
+  if (result.status?.state === "failed") {
+    const text = parts.find(p => p?.kind === "text" && typeof p.text === "string")?.text ?? "no detail";
+    throw Object.assign(new Error(`jsonrpc task failed: ${text}`), { code: "schema_invalid" });
+  }
+  return parts.find(p => p?.kind === "data" && p.data && typeof p.data === "object")?.data ?? null;
+}
+
+/** Frozen F4 envelope: bare array, or {properties|results|listings: []} (+ optional total). */
+function extractItems(payload) {
+  if (Array.isArray(payload)) return { items: payload, total: payload.length };
+  const body = jsonRpcData(payload) ?? payload;
+  for (const key of ITEM_KEYS) {
+    if (Array.isArray(body?.[key])) {
+      return { items: body[key], total: Number.isFinite(body.total) ? body.total : null };
+    }
+  }
+  return null;
+}
+
+/** Paginated search: advances offset until a short page, the total, or the hard cap. */
+async function collectSearchPages(card, params, credentials, fetchPage) {
+  const items = [];
+  let offset = 0;
+  for (;;) {
+    const page = extractItems(await fetchPage(buildSearchRequest(card, { ...params, offset }, credentials)));
+    if (!page) throw Object.assign(new Error("search payload was not a listings envelope"), { code: "schema_invalid" });
+    items.push(...page.items);
+    offset += page.items.length;
+    if (page.items.length < (params.limit ?? PAGE_LIMIT)) break;
+    // shortcut: the A2A search skill has no offset (strict schema) — one page per crawl;
+    // upgrade when the skill advertises offset. Legacy endpoints.search does advance.
+    if (isJsonRpcCard(card)) break;
+    if (page.total != null && offset >= page.total) break;
+    if (offset >= MAX_PAGINATED_ITEMS) break;
+  }
+  return items.slice(0, MAX_PAGINATED_ITEMS);
+}
+
+/** A2A search needs un_locode + transaction_type; env wins, LOCODE-shaped registry jurisdictions are the fallback. */
+function searchParams(agent) {
+  const jurisdictions = Array.isArray(agent.jurisdictions) ? agent.jurisdictions : [];
+  const params = {
+    transaction_type: process.env.RAIA_A2A_TRANSACTION_TYPE || "LETTINGS",
+    limit:            PAGE_LIMIT,
+  };
+  const locode = process.env.RAIA_A2A_UN_LOCODE || jurisdictions.find(j => checkPattern(j, "^[A-Z]{2}[A-Z0-9]{3}$"));
+  if (locode) params.un_locode = locode;
+  return params;
+}
+
+/** Bearer credentials. DDL-verified: tbl_raia_agent_registry has no credential column, so env is the only live source today. */
+function credentialsFor(agent) {
+  const token = agent?.agent_token || process.env.RAIA_AGENT_TOKEN || null;
+  return token ? { token } : null;
+}
+
 // ─── Registry helpers ──────────────────────────────────────────────────────
 
 async function fetchApprovedAgents() {
-  let q = sb.from("tbl_raia_agent_registry")
-    .select("agent_id, agent_card_url, last_crawled_at, last_crawl_status, listing_count_last")
+  let q = db().from("tbl_raia_agent_registry")
+    .select("agent_id, agent_card_url, last_crawled_at, last_crawl_status, listing_count_last, jurisdictions")
     .eq("verification_status", "approved")
     .is("revoked_at", null);
   if (AGENT_ID) q = q.eq("agent_id", AGENT_ID);
@@ -227,7 +366,7 @@ async function updateRegistry(agentId, patch) {
     vlog(`[dry] update registry ${agentId}`, patch);
     return;
   }
-  const { error } = await sb.from("tbl_raia_agent_registry")
+  const { error } = await db().from("tbl_raia_agent_registry")
     .update({ ...patch, updated_at: new Date().toISOString() })
     .eq("agent_id", agentId);
   if (error) warn(`registry update ${agentId}: ${error.message}`);
@@ -240,7 +379,7 @@ async function upsertListing(row) {
     vlog(`[dry] upsert ${row.agent_id} / ${row.raia_id}`);
     return;
   }
-  const { error } = await sb
+  const { error } = await db()
     .from("tbl_external_raia_listings")
     .upsert(row, { onConflict: "agent_id,raia_id" })
     .select("external_id")
@@ -253,7 +392,7 @@ async function markStaleListings(agentId, seenRaiaIds) {
   // this run → withdrawn after STALE_AFTER_MISSED_CRAWLS missed cycles.
   const cutoff = new Date(Date.now() - (STALE_AFTER_MISSED_CRAWLS * FRESHNESS_WINDOW_MS)).toISOString();
 
-  const { data: candidates, error: qErr } = await sb
+  const { data: candidates, error: qErr } = await db()
     .from("tbl_external_raia_listings")
     .select("external_id, raia_id, last_seen_at")
     .eq("agent_id", agentId)
@@ -274,7 +413,7 @@ async function markStaleListings(agentId, seenRaiaIds) {
   }
 
   const ids = toWithdraw.map(r => r.external_id);
-  const { error: uErr } = await sb
+  const { error: uErr } = await db()
     .from("tbl_external_raia_listings")
     .update({ withdrawn_at: new Date().toISOString() })
     .in("external_id", ids);
@@ -316,32 +455,26 @@ async function crawlAgent(agent) {
     summary.error  = `agent-card: ${cardErrors.join("; ")}`;
     return summary;
   }
-  if (card.agent_id !== agent_id) {
+  if (card.agent_id && card.agent_id !== agent_id) {
     warn(`${agent_id}: card agent_id mismatch (${card.agent_id})`);
   }
 
   if (VALIDATE_CARDS && !FORCE) return summary;
 
-  let searchPayload;
+  let searchResults;
   try {
-    searchPayload = await fetchJson(card.endpoints.search, {
-      timeoutMs: FETCH_TIMEOUT_SEARCH_MS,
-      label: `search[${agent_id}]`,
-    });
+    searchResults = await collectSearchPages(card, searchParams(agent), credentialsFor(agent), req =>
+      fetchJson(req.url, {
+        timeoutMs: FETCH_TIMEOUT_SEARCH_MS,
+        label:     `search[${agent_id}]`,
+        method:    req.method,
+        headers:   req.headers,
+        body:      req.body,
+      }));
   } catch (e) {
-    summary.status = e.code === "rate_limited" ? "rate_limited" : "unreachable";
+    summary.status = e.code === "rate_limited" ? "rate_limited"
+                   : e.code === "schema_invalid" ? "schema_invalid" : "unreachable";
     summary.error  = e.message;
-    return summary;
-  }
-
-  let searchResults = [];
-  if (Array.isArray(searchPayload)) {
-    searchResults = searchPayload;
-  } else if (searchPayload && Array.isArray(searchPayload.results)) {
-    searchResults = searchPayload.results;
-  } else {
-    summary.status = "schema_invalid";
-    summary.error  = "search payload was not an array nor { results: [] }";
     return summary;
   }
 
@@ -357,7 +490,10 @@ async function crawlAgent(agent) {
 
   vlog(`${agent_id}: search returned ${raiaIds.length} raia_ids`);
 
-  const propertyTpl = card.endpoints.property;
+  // Flat v0.2 cards publish full listing objects from search (no endpoints.property).
+  const inlineListings = new Map(
+    searchResults.filter(r => r && typeof r === "object" && r.raia_id).map(r => [r.raia_id, r]));
+  const propertyTpl = card.endpoints?.property;
   let cursor = 0;
 
   async function worker() {
@@ -365,16 +501,21 @@ async function crawlAgent(agent) {
       const idx = cursor++;
       if (idx >= raiaIds.length) break;
       const raia_id = raiaIds[idx];
-      const url = propertyTpl.replace("{raia_id}", encodeURIComponent(raia_id));
-      let listing;
-      try {
-        listing = await fetchJson(url, {
-          timeoutMs: FETCH_TIMEOUT_LISTING_MS,
-          label: `listing[${agent_id}/${raia_id}]`,
-        });
-      } catch (e) {
-        warn(`${agent_id}: listing ${raia_id} fetch failed: ${e.message}`);
-        continue;
+      let listing = inlineListings.get(raia_id);
+      if (!listing) {
+        if (!propertyTpl) {
+          warn(`${agent_id}: listing ${raia_id} not inline and card has no endpoints.property`);
+          continue;
+        }
+        try {
+          listing = await fetchJson(propertyTpl.replace("{raia_id}", encodeURIComponent(raia_id)), {
+            timeoutMs: FETCH_TIMEOUT_LISTING_MS,
+            label: `listing[${agent_id}/${raia_id}]`,
+          });
+        } catch (e) {
+          warn(`${agent_id}: listing ${raia_id} fetch failed: ${e.message}`);
+          continue;
+        }
       }
       const lerrs = validateListing(listing);
       if (lerrs.length) {
@@ -386,7 +527,7 @@ async function crawlAgent(agent) {
         const { row, warnings } = normaliseListing(listing, {
           agent_id,
           agent_card_url,
-          schema_version: card.schema_version,
+          schema_version: card.schema_version ?? card.protocolVersion,
         });
         if (warnings.length) vlog(`${agent_id}: ${raia_id} warnings:`, warnings);
         await upsertListing(row);
@@ -492,9 +633,17 @@ async function main() {
   return 0;
 }
 
-main()
-  .then(code => process.exit(code))
-  .catch(e => {
-    err(`fatal: ${e.stack || e.message}`);
+module.exports = { buildSearchRequest, extractItems, collectSearchPages, isJsonRpcCard };
+
+if (require.main === module) {
+  if (!SUPABASE_URL || !SUPABASE_KEY) {
+    console.error("❌  Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY");
     process.exit(3);
-  });
+  }
+  main()
+    .then(code => process.exit(code))
+    .catch(e => {
+      err(`fatal: ${e.stack || e.message}`);
+      process.exit(3);
+    });
+}
