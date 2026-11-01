@@ -91,6 +91,10 @@ function setClient(client) {
   sb = client;
 }
 
+// Test seam: swap the HTTP layer so crawlAgent runs end-to-end without network.
+let fetchImpl = fetchJson;
+function setFetch(fn) { fetchImpl = fn; }
+
 // ─── Logging ────────────────────────────────────────────────────────────────
 
 const ts = () => new Date().toISOString().slice(11, 19);
@@ -168,6 +172,18 @@ function validateListing(listing) {
   if (listing.service_type &&
       !["long_term", "short_term", "sale", "longlet", "shortlet"].includes(listing.service_type)) {
     errors.push(`service_type out of enum: ${listing.service_type}`);
+  }
+  return errors;
+}
+
+// Flat A2A items name protocol fields differently and omit registry-injected
+// ones, so the ROW is validated after normalising with the registry context.
+// Key-presence alone is not enough: the mapper always emits every key, so a
+// nulled required column would otherwise pass.
+function validateRow(row) {
+  const errors = validateListing(row);
+  for (const f of (LISTING_SCHEMA.required ?? [])) {
+    if (row[f] == null) errors.push(`null required field: ${f}`);
   }
   return errors;
 }
@@ -437,6 +453,7 @@ async function crawlAgent(agent) {
     agent_id,
     status: "ok",
     listings_seen: 0,
+    listings_rejected: 0,
     listings_upserted: 0,
     listings_withdrawn: 0,
     error: null,
@@ -444,7 +461,7 @@ async function crawlAgent(agent) {
 
   let card;
   try {
-    card = await fetchJson(agent_card_url, {
+    card = await fetchImpl(agent_card_url, {
       timeoutMs: FETCH_TIMEOUT_CARD_MS,
       label: `agent-card[${agent_id}]`,
     });
@@ -464,12 +481,14 @@ async function crawlAgent(agent) {
     warn(`${agent_id}: card agent_id mismatch (${card.agent_id})`);
   }
 
+  const flatCard = isJsonRpcCard(card);
+
   if (VALIDATE_CARDS && !FORCE) return summary;
 
   let searchResults;
   try {
     searchResults = await collectSearchPages(card, searchParams(agent), credentialsFor(agent), req =>
-      fetchJson(req.url, {
+      fetchImpl(req.url, {
         timeoutMs: FETCH_TIMEOUT_SEARCH_MS,
         label:     `search[${agent_id}]`,
         method:    req.method,
@@ -510,21 +529,26 @@ async function crawlAgent(agent) {
       if (!listing) {
         if (!propertyTpl) {
           warn(`${agent_id}: listing ${raia_id} not inline and card has no endpoints.property`);
+          summary.listings_rejected++;
           continue;
         }
         try {
-          listing = await fetchJson(propertyTpl.replace("{raia_id}", encodeURIComponent(raia_id)), {
+          listing = await fetchImpl(propertyTpl.replace("{raia_id}", encodeURIComponent(raia_id)), {
             timeoutMs: FETCH_TIMEOUT_LISTING_MS,
             label: `listing[${agent_id}/${raia_id}]`,
           });
         } catch (e) {
           warn(`${agent_id}: listing ${raia_id} fetch failed: ${e.message}`);
+          summary.listings_rejected++;
           continue;
         }
       }
-      const lerrs = validateListing(listing);
+      // Flat A2A cards publish A2A-shaped items; the legacy endpoints.* path
+      // keeps its pre-existing raw-item validation, untouched.
+      const lerrs = flatCard ? [] : validateListing(listing);
       if (lerrs.length) {
         warn(`${agent_id}: listing ${raia_id} schema invalid: ${lerrs.join("; ")}`);
+        summary.listings_rejected++;
         continue;
       }
       summary.listings_seen++;
@@ -534,12 +558,19 @@ async function crawlAgent(agent) {
           agent_card_url,
           schema_version: card.schema_version ?? card.protocolVersion,
         });
+        const rerrs = flatCard ? validateRow(row) : [];
+        if (rerrs.length) {
+          warn(`${agent_id}: listing ${raia_id} row rejected: ${rerrs.join("; ")}`);
+          summary.listings_rejected++;
+          continue;
+        }
         if (warnings.length) vlog(`${agent_id}: ${raia_id} warnings:`, warnings);
         await upsertListing(row);
         summary.listings_upserted++;
         seenRaiaIds.add(row.raia_id);
       } catch (e) {
         warn(`${agent_id}: listing ${raia_id} normalise/upsert failed: ${e.message}`);
+        summary.listings_rejected++;
       }
     }
   }
@@ -547,7 +578,14 @@ async function crawlAgent(agent) {
   const workers = Array.from({ length: PER_LISTING_CONCURRENCY }, () => worker());
   await Promise.all(workers);
 
-  summary.listings_withdrawn = await markStaleListings(agent_id, seenRaiaIds);
+  // Fail-closed sweep: an agent that accepted nothing this run (all rows
+  // rejected) must not withdraw the catalogue it failed to read.
+  summary.listings_withdrawn = summary.listings_upserted > 0
+    ? await markStaleListings(agent_id, seenRaiaIds)
+    : 0;
+  if (summary.listings_seen > 0 && summary.listings_upserted === 0) {
+    err(`${agent_id}: all ${summary.listings_seen} listings rejected — nothing written`);
+  }
   return summary;
 }
 
@@ -586,6 +624,7 @@ async function main() {
     agents_schema_invalid: 0,
     agents_rate_limited:   0,
     listings_seen:         0,
+    listings_rejected:     0,
     listings_upserted:     0,
     listings_withdrawn:    0,
   };
@@ -599,17 +638,18 @@ async function main() {
       err(`${agent.agent_id} unhandled: ${e.message}`);
       summary = {
         agent_id: agent.agent_id, status: "unreachable",
-        listings_seen: 0, listings_upserted: 0, listings_withdrawn: 0,
+        listings_seen: 0, listings_rejected: 0, listings_upserted: 0, listings_withdrawn: 0,
         error: e.message,
       };
     }
 
     rollup[`agents_${summary.status}`] = (rollup[`agents_${summary.status}`] ?? 0) + 1;
     rollup.listings_seen      += summary.listings_seen;
+    rollup.listings_rejected  += summary.listings_rejected;
     rollup.listings_upserted  += summary.listings_upserted;
     rollup.listings_withdrawn += summary.listings_withdrawn;
 
-    info(`   ${summary.status} — seen=${summary.listings_seen} upserted=${summary.listings_upserted} withdrawn=${summary.listings_withdrawn}` +
+    info(`   ${summary.status} — seen=${summary.listings_seen} rejected=${summary.listings_rejected} upserted=${summary.listings_upserted} withdrawn=${summary.listings_withdrawn}` +
          (summary.error ? ` err=${summary.error}` : ""));
 
     await updateRegistry(agent.agent_id, {
@@ -630,7 +670,7 @@ async function main() {
   info(`done in ${elapsed}s — ${pipelineStatus} ` +
        `agents ok=${rollup.agents_ok} unreachable=${rollup.agents_unreachable} ` +
        `schema_invalid=${rollup.agents_schema_invalid} rate_limited=${rollup.agents_rate_limited} ` +
-       `listings seen=${rollup.listings_seen} upserted=${rollup.listings_upserted} ` +
+       `listings seen=${rollup.listings_seen} rejected=${rollup.listings_rejected} upserted=${rollup.listings_upserted} ` +
        `withdrawn=${rollup.listings_withdrawn}`);
 
   if (pipelineStatus === "failure") return 2;
@@ -638,7 +678,7 @@ async function main() {
   return 0;
 }
 
-module.exports = { buildSearchRequest, extractItems, collectSearchPages, isJsonRpcCard, upsertListing, setClient };
+module.exports = { buildSearchRequest, extractItems, collectSearchPages, isJsonRpcCard, upsertListing, setClient, crawlAgent, setFetch };
 
 if (require.main === module) {
   if (!SUPABASE_URL || !SUPABASE_KEY) {

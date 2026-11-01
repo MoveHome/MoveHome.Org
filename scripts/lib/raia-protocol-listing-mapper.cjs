@@ -21,13 +21,17 @@
 
 "use strict";
 
-// v0.1 → v0.2 backwards compatibility for service_type.
+// v0.1 → v0.2 backwards compatibility for service_type, plus the A2A
+// transaction_type vocabulary flat cards send in its place (EA sends LETTINGS
+// for a letting of the property → long_term; SALES is a disposal → sale).
 const SERVICE_TYPE_MAP = {
   long_term:  "long_term",
   short_term: "short_term",
   sale:       "sale",
   longlet:    "long_term",
   shortlet:   "short_term",
+  LETTINGS:   "long_term",
+  SALES:      "sale",
 };
 
 const ISO_CURRENCY_RE  = /^[A-Z]{3}$/;
@@ -129,15 +133,15 @@ function normaliseListing(listing, ctx) {
   const warnings = [];
 
   // ── Service type ────────────────────────────────────────────────────────
-  const rawServiceType = asTrimmedStringOrNull(listing.service_type);
+  const rawServiceType = asTrimmedStringOrNull(listing.service_type ?? listing.transaction_type);
   const service_type   = SERVICE_TYPE_MAP[rawServiceType];
   if (!service_type) throw new Error(`Unknown service_type: ${rawServiceType}`);
 
   // ── Location ────────────────────────────────────────────────────────────
   const lat = asNumberOrNull(listing?.location?.lat);
-  const lon = asNumberOrNull(listing?.location?.lon);
+  const lon = asNumberOrNull(listing?.location?.lon ?? listing?.location?.lng);
 
-  const un_locode = asTrimmedStringOrNull(listing.un_locode)?.toUpperCase() ?? null;
+  const un_locode = asTrimmedStringOrNull(listing.un_locode ?? listing?.location?.un_locode)?.toUpperCase() ?? null;
   if (un_locode && !UN_LOCODE_RE.test(un_locode)) {
     warnings.push(`un_locode failed regex: ${un_locode}`);
   }
