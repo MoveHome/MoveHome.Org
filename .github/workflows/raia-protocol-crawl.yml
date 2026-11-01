@@ -55,8 +55,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        id: checkout
 
       - uses: actions/setup-node@v4
+        id: setup
         with:
           node-version: '20'
           cache: 'npm'
@@ -79,6 +81,7 @@ jobs:
           echo "Required secrets are present."
 
       - name: Install dependencies
+        id: install
         run: npm install --omit=dev --ignore-scripts
 
       - name: Run RAIA Protocol crawl
@@ -127,8 +130,11 @@ jobs:
         run: |
           title='[crawl] federated crawl failing'
           failed="unknown"
+          [ "${{ steps.checkout.outcome }}" = "failure" ] && failed="actions/checkout"
+          [ "${{ steps.setup.outcome }}" = "failure" ]    && failed="actions/setup-node"
+          [ "${{ steps.install.outcome }}" = "failure" ]  && failed="Install dependencies"
           [ "${{ steps.preflight.outcome }}" = "failure" ] && failed="Preflight secrets"
-          [ "${{ steps.crawl.outcome }}" = "failure" ] && failed="Run RAIA Protocol crawl"
+          [ "${{ steps.crawl.outcome }}" = "failure" ]     && failed="Run RAIA Protocol crawl"
 
           body=$(printf 'Federated crawl failed.\n\n- Run: %s\n- Run id: %s\n- Conclusion: %s\n- Failed step: %s\n- Event: %s\n\nRe-run from the Actions tab once the cause is fixed. No secret values are included in this issue.' \
             "$RUN_URL" "${{ github.run_id }}" "${{ job.status }}" "$failed" "${{ github.event_name }}")
