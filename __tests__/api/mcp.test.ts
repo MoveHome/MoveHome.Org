@@ -149,6 +149,26 @@ describe('tools/call get_property', () => {
     expect(body.result.isError).toBeUndefined();
   });
 
+  it('publishes a zero price as no price, never £0', async () => {
+    getListingByRaiaId.mockResolvedValue({ ...LISTING, rent_pcm: null, daily_rate: 0, currency: null });
+    const { body } = await rpc('tools/call', {
+      name: 'get_property',
+      arguments: { raia_id: 'prop-gb-rlf-000528' }
+    });
+    const { price } = payload(body.result.content[0].text).listing;
+    expect(price).toEqual({ rent_pcm: null, daily_rate: null, asking_price: null, currency: null });
+  });
+
+  it('keeps the currency only when there is a real price', async () => {
+    getListingByRaiaId.mockResolvedValue({ ...LISTING, daily_rate: 0, asking_price: null });
+    const { body } = await rpc('tools/call', {
+      name: 'get_property',
+      arguments: { raia_id: 'prop-gb-rlf-000528' }
+    });
+    const { price } = payload(body.result.content[0].text).listing;
+    expect(price).toEqual({ rent_pcm: 2400, daily_rate: null, asking_price: null, currency: 'GBP' });
+  });
+
   it('reports a missing or non-public listing as an error', async () => {
     getListingByRaiaId.mockResolvedValue(null);
     const { body } = await rpc('tools/call', {
