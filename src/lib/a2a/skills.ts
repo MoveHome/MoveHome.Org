@@ -41,9 +41,18 @@ function parse<T>(schema: z.ZodType<T>, params: unknown): T {
   return result.data;
 }
 
+// A zero or negative price is never a real one — publish it as "no price" (null)
+// so agents say "price on application" rather than quoting £0.
+function priceOrNull(n: number | null): number | null {
+  return n != null && n > 0 ? n : null;
+}
+
 // Curated public projection of a listing — the same data the public card shows,
 // shaped for agent consumption (no internal sync/snapshot bookkeeping).
 function toPublicListing(l: Listing) {
+  const rent_pcm = priceOrNull(l.rent_pcm);
+  const daily_rate = priceOrNull(l.daily_rate);
+  const asking_price = priceOrNull(l.asking_price);
   return {
     raia_id: l.raia_id,
     agent_id: l.agent_id,
@@ -59,10 +68,10 @@ function toPublicListing(l: Listing) {
     furnishing: l.furnishing,
     available_from: l.available_from,
     price: {
-      rent_pcm: l.rent_pcm,
-      daily_rate: l.daily_rate,
-      asking_price: l.asking_price,
-      currency: l.currency
+      rent_pcm,
+      daily_rate,
+      asking_price,
+      currency: (rent_pcm ?? daily_rate ?? asking_price) != null ? l.currency : null
     },
     location: {
       un_locode: l.un_locode,
