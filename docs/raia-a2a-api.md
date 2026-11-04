@@ -127,6 +127,14 @@ Artifact `search_results` → `{ total, count, offset, limit, listings: [ … ] 
 Artifact `property` → `{ listing: { … } }`. Error `-32001` if no public listing matches.
 
 ### `create_enquiry`
+> **Gated (MoveHome/MoveHome.Org#34).** Off unless `AGENT_ENQUIRY_WRITES=on`; the Agent
+> Card omits the skill while off and calls return JSON-RPC `-32601` (HTTP 403). When on,
+> the TEST-org fence admits only listings whose `agent_id` is in
+> `AGENT_ENQUIRY_TEST_AGENT_IDS` (empty = none); the write throttle fails closed (503).
+> Optional `claimed_platform` is stored as `source.claimed_platform`;
+> `source.verified_platform` is set only from an OAuth client binding (null until
+> Phase 1). Optional `idempotency_key` makes retries return the original receipt.
+
 Records an enquiry and forwards it to the source agent (SSRF-guarded; HTTPS
 public hosts only — same pipeline as `POST /api/enquire`).
 

@@ -137,6 +137,14 @@ All params optional; omit to browse broadly. Schema is strict (unknown keys reje
 
 ### 3. `create_enquiry` — submit an enquiry (WRITE — sends a real lead) ⚠️
 
+> **Closed pilot — not currently available to agents.** `create_enquiry` is switched off
+> by default and is only listed in the Agent Card while the pilot is open. During the pilot
+> it accepts writes for designated test listings only; calls against real listings are
+> rejected. Until then, people can enquire at https://movehome.org/enquire. Optional
+> params during the pilot: `claimed_platform` (string, e.g. `grok`; recorded as a
+> claim, never as verified) and `idempotency_key` (8–128 chars; a retry returns the
+> original receipt and is not re-sent).
+
 This **records an enquiry and forwards it to the source estate agent** (a real human gets it).
 Only call it with the user's explicit consent and their real contact details. Note the
 **nested `enquirer` object**.
@@ -184,7 +192,8 @@ Only call it with the user's explicit consent and their real contact details. No
 ## Rate limits
 
 - ~60 requests/min per IP across all skills.
-- `create_enquiry` is additionally capped (≈5/min per IP) with duplicate suppression
+- `create_enquiry` (when enabled) is additionally capped (≈5/min per IP; refused with 503 if
+  the limiter is unavailable) with duplicate suppression
   (same email+listing within ~10 min) and a per-email hourly cap. All read skills are unaffected.
 
 ## Trust (optional)

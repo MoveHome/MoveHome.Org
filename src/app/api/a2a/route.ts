@@ -19,6 +19,7 @@ import { buildAgentCard } from '@/lib/a2a/card';
 import { signAgentCard } from '@/lib/a2a/card-signing';
 import { moveHomeExecutor } from '@/lib/a2a/executor';
 import { enforceRateLimit, rateLimitHeaders } from '@/lib/portal/rate-limit';
+import { agentWritesEnabled, AGENT_WRITES_DISABLED_MESSAGE } from '@/lib/agent-write-policy';
 
 export const dynamic = 'force-dynamic';
 
@@ -125,20 +126,30 @@ export async function POST(req: Request) {
     });
   }
 
-  // Extra throttle for the one write skill. Reads already passed the 60/min
-  // bucket above; enquiries get a tighter per-IP cap on top. Fails open.
+  // The one write skill (MoveHome/MoveHome.Org#34). It's flag-gated (default
+  // off), so a disabled write never touches the limiter or the pipeline. When
+  // on, it gets a tighter cap on top of the 60/min read bucket and FAILS CLOSED:
+  // an unavailable limiter refuses the write rather than letting spam through
+  // to real agents. The cap is per-IP until OAuth lands, then per client_id.
   if (isCreateEnquiry(raw)) {
+    if (!agentWritesEnabled()) {
+      return json(rpcError(requestId(raw), -32601, AGENT_WRITES_DISABLED_MESSAGE), 403, rl.headers);
+    }
+    let decision: Awaited<ReturnType<typeof enforceRateLimit>>;
     try {
       const ipKey = `a2a-enquiry:${createHash('sha256').update(clientIp(req)).digest('hex').slice(0, 32)}`;
-      const decision = await enforceRateLimit(ipKey, 'enquiry.write', ENQUIRY_PER_MIN);
-      if (!decision.ok) {
-        return json(rpcError(requestId(raw), -32603, 'Enquiry rate limit exceeded.'), 429, {
-          ...rateLimitHeaders(decision),
-          'Retry-After': String(decision.retryAfter)
-        });
-      }
+      decision = await enforceRateLimit(ipKey, 'enquiry.write', ENQUIRY_PER_MIN);
     } catch {
-      /* limiter unavailable — fail open */
+      return json(rpcError(requestId(raw), -32603, 'Enquiry service temporarily unavailable.'), 503, {
+        ...rl.headers,
+        'Retry-After': '60'
+      });
+    }
+    if (!decision.ok) {
+      return json(rpcError(requestId(raw), -32603, 'Enquiry rate limit exceeded.'), 429, {
+        ...rateLimitHeaders(decision),
+        'Retry-After': String(decision.retryAfter)
+      });
     }
   }
 

@@ -3,6 +3,7 @@
 // the JSON-RPC endpoint and the skills they can invoke. Typed against @a2a-js/sdk.
 
 import { A2A_PROTOCOL_VERSION, type AgentCard } from './types';
+import { agentWritesEnabled } from '@/lib/agent-write-policy';
 
 const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || 'https://movehome.org').replace(/\/$/, '');
 
@@ -10,14 +11,19 @@ const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || 'https://movehome.org').re
 const AGENT_VERSION = process.env.npm_package_version || '0.1.0';
 
 export function buildAgentCard(): AgentCard {
-  return {
+  // The write skill is advertised only while agent writes are switched on
+  // (MoveHome/MoveHome.Org#34), so the card never promises a door that's shut.
+  const writes = agentWritesEnabled();
+  const card: AgentCard = {
     protocolVersion: A2A_PROTOCOL_VERSION,
     name: 'MoveHome.org Property Agent',
     description:
       'Agent-to-agent access to the MoveHome.org property catalogue. Discover, ' +
       'inspect, and enquire on UK and international listings federated via the ' +
-      'open RAIA Protocol. Read-only search and listing retrieval are anonymous; ' +
-      'enquiries are forwarded to the source estate agent.',
+      'open RAIA Protocol. Read-only search and listing retrieval are anonymous' +
+      (writes
+        ? '; enquiries (closed pilot, test listings only) are forwarded to the source estate agent.'
+        : '. Agent enquiries are in a closed pilot and not currently offered.'),
     url: `${SITE_URL}/api/a2a`,
     preferredTransport: 'JSONRPC',
     version: AGENT_VERSION,
@@ -72,4 +78,6 @@ export function buildAgentCard(): AgentCard {
       }
     ]
   };
+  if (!writes) card.skills = card.skills.filter((s) => s.id !== 'create_enquiry');
+  return card;
 }
