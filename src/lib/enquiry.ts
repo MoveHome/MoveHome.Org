@@ -8,6 +8,11 @@
 import { randomUUID } from 'node:crypto';
 import { createSupabaseAdminClient } from '@/lib/supabase-admin';
 import type { Json } from '@/lib/database.types';
+import {
+  checkTestFence,
+  enquiryIdForIdempotencyKey,
+  type AgentAttribution
+} from '@/lib/agent-write-policy';
 
 export interface ViewingRequest {
   preferred_dates: string[];
@@ -24,6 +29,15 @@ export interface CreateEnquiryInput {
   viewing_request?: ViewingRequest | null;
   userId?: string | null;
   ipCountry?: string | null;
+  /**
+   * Present only for agent-originated writes (A2A/MCP). Turns on the TEST-org
+   * fence, records claimed vs verified attribution, and honours an optional
+   * idempotency key. Absent for the human web form.
+   */
+  agent?: {
+    attribution: AgentAttribution;
+    idempotencyKey?: string | null;
+  };
 }
 
 export type CreateEnquiryResult =
@@ -108,6 +122,36 @@ export async function createEnquiry(input: CreateEnquiryInput): Promise<CreateEn
     return { ok: false, httpStatus: 404, error: 'Listing not found' };
   }
 
+  // ── Agent writes: TEST-org fence + idempotency ─────────────────────────
+  // The fence uses the listing's owning org from the DB, never caller input,
+  // so a valid request can't steer an agent write onto a production agent.
+  let enquiry_id: string = randomUUID();
+  if (input.agent) {
+    const fence = checkTestFence(listing.agent_id);
+    if (!fence.ok) {
+      return { ok: false, httpStatus: 403, error: fence.error };
+    }
+    const key = input.agent.idempotencyKey?.trim();
+    if (key) {
+      enquiry_id = enquiryIdForIdempotencyKey(`${input.agent.attribution.channel}:${input.raia_id}`, key);
+      // A retry of an already-persisted write returns the original receipt and
+      // never forwards again. Checked before the anti-spam guards so a retry
+      // isn't mistaken for a duplicate submission.
+      const { data: existing, error: existingError } = await admin
+        .from('tbl_enquiries')
+        .select('enquiry_id')
+        .eq('enquiry_id', enquiry_id)
+        .maybeSingle();
+      if (existingError) {
+        console.error('[enquiry] idempotency lookup', existingError.message);
+        return { ok: false, httpStatus: 500, error: 'Could not record enquiry' };
+      }
+      if (existing) {
+        return { ok: true, enquiry_id, status: 'received' };
+      }
+    }
+  }
+
   // Normalise the email once so storage and the abuse counters below agree
   // (case/whitespace variants would otherwise dodge the per-sender limits).
   const email = input.email.trim().toLowerCase();
@@ -155,7 +199,6 @@ export async function createEnquiry(input: CreateEnquiryInput): Promise<CreateEn
   }
 
   // ── Compose enquiry.json v0.2 payload ──────────────────────────────────
-  const enquiry_id = randomUUID();
   const submitted_at = new Date().toISOString();
   const phone = input.phone || null;
   const preferred_contact = input.preferred_contact || null;
@@ -165,6 +208,9 @@ export async function createEnquiry(input: CreateEnquiryInput): Promise<CreateEn
     origin: 'movehome.org',
     ...(input.ipCountry ? { ip_country: input.ipCountry } : {})
   };
+  // Stored provenance adds the agent attribution. The wire `source` above stays
+  // within enquiry.json's source_block (additionalProperties: false).
+  const storedSource = input.agent ? { ...source, ...input.agent.attribution } : source;
 
   const wirePayload = {
     enquiry_id,
@@ -193,12 +239,17 @@ export async function createEnquiry(input: CreateEnquiryInput): Promise<CreateEn
     preferred_contact,
     message: input.message,
     viewing_request: viewing_request as unknown as Json,
-    source: source as unknown as Json,
+    source: storedSource as unknown as Json,
     status: 'new',
     submitted_at
   });
 
   if (insertError) {
+    // Concurrent retry with the same idempotency key won the insert race; the
+    // enquiry is persisted exactly once, so return the same receipt.
+    if (input.agent?.idempotencyKey && insertError.code === '23505') {
+      return { ok: true, enquiry_id, status: 'received' };
+    }
     console.error('[enquiry] insert', insertError.message);
     return { ok: false, httpStatus: 500, error: 'Could not record enquiry' };
   }

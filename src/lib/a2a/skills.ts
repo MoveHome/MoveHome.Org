@@ -8,6 +8,7 @@ import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { getListingByRaiaId, searchListings } from '@/lib/queries';
 import { createEnquiry } from '@/lib/enquiry';
+import { agentWritesEnabled, AGENT_WRITES_DISABLED_MESSAGE, buildAttribution } from '@/lib/agent-write-policy';
 import type { Listing, SearchParams } from '@/lib/types';
 import type { Artifact } from './types';
 
@@ -196,13 +197,27 @@ const enquirySchema = z
         party_size: z.number().int().min(1).max(50).optional()
       })
       .strict()
-      .optional()
+      .optional(),
+    // Caller-asserted platform (e.g. "grok", "gemini", "muse"). Recorded as
+    // claimed_platform only; it never sets verified_platform.
+    claimed_platform: z.string().trim().min(1).max(64).optional(),
+    // Retrying with the same key returns the original receipt, no second send.
+    idempotency_key: z.string().trim().min(8).max(128).optional()
   })
   .strict();
 
 async function createEnquirySkill(params: unknown): Promise<SkillResult> {
+  // Ruling #1/#5 (MoveHome/MoveHome.Org#34): agent writes are flag-gated,
+  // default off. The route rejects earlier; this is defence in depth.
+  if (!agentWritesEnabled()) {
+    throw new SkillError(AGENT_WRITES_DISABLED_MESSAGE);
+  }
   const input = parse(enquirySchema, params);
   const result = await createEnquiry({
+    agent: {
+      attribution: buildAttribution('a2a', input.claimed_platform),
+      idempotencyKey: input.idempotency_key ?? null
+    },
     raia_id: input.raia_id,
     name: input.enquirer.name,
     email: input.enquirer.email,
