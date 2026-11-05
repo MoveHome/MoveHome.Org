@@ -1,0 +1,24 @@
+name: Demo data plane isolation
+
+# Must-fail isolation fixtures for the expo demo plane (supabase/demo-fixtures).
+# Each fixture asserts a forbidden operation is rejected, so a green run means
+# every guard held. Reports BLOCKED (green) until the demo project exists.
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  must-fail:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install psql
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+      - name: Must-fail fixtures
+        env:
+          DEMO_SUPABASE_DB_URL: ${{ secrets.DEMO_SUPABASE_DB_URL }}
+        run: npm run test:demo
