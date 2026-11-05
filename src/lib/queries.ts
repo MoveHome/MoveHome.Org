@@ -140,9 +140,12 @@ function rowToListing(row: ExternalListingRow): Listing {
   };
 }
 
-// RLS already filters non-public / withdrawn / duplicate / outlier rows —
-// see migration 0003 for the policy. Queries don't need to repeat those
-// predicates.
+// The public reader repeats the visibility predicates from migration 0003's RLS
+// policy instead of trusting RLS alone: on 2026-11-05 a withdrawn card stayed
+// publicly listed for 259 s because the policy was not applied to this reader
+// (anon-key drift or a missing policy). A takedown must be observable.
+// shortcut: the publish_from/publish_until window is still RLS-only; no live row
+// sets it — add it here if the feed starts scheduling publication.
 
 export async function searchListings(
   params: SearchParams = {}
@@ -153,6 +156,10 @@ export async function searchListings(
   let query = sb
     .from('tbl_external_raia_listings')
     .select('*', { count: 'exact' })
+    .is('withdrawn_at', null)
+    .is('duplicate_of', null)
+    .eq('is_outlier', false)
+    .eq('visibility', 'public')
     .order('synced_at', { ascending: false });
 
   if (params.un_locode) query = query.eq('un_locode', params.un_locode);
@@ -186,6 +193,8 @@ export async function getListingByRaiaId(raia_id: string): Promise<Listing | nul
     .from('tbl_external_raia_listings')
     .select('*')
     .eq('raia_id', raia_id)
+    .is('withdrawn_at', null)
+    .eq('visibility', 'public')
     .maybeSingle();
 
   if (error) {
@@ -203,6 +212,10 @@ export async function getMapPins(params: SearchParams = {}): Promise<MapPin[]> {
   let query = sb
     .from('tbl_external_raia_listings')
     .select('raia_id,latitude,longitude,rent_pcm,asking_price,bedrooms,property_type,photo_url,agent_id')
+    .is('withdrawn_at', null)
+    .is('duplicate_of', null)
+    .eq('is_outlier', false)
+    .eq('visibility', 'public')
     .not('latitude', 'is', null)
     .not('longitude', 'is', null);
 
