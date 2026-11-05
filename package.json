@@ -17,7 +17,8 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "portal:create-credential": "node scripts/portal-create-credential.cjs",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:demo": "bash scripts/demo/run-must-fail-fixtures.sh"
   },
   "dependencies": {
     "@a2a-js/sdk": "^0.3.13",
