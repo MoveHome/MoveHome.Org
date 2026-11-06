@@ -5,7 +5,8 @@
 #   scripts/demo/rollback-demo.sh              # re-point the alias at the committed pin
 #   scripts/demo/rollback-demo.sh dpl_abcd1234 # flip to a specific previous build
 #
-# Requires an authenticated Vercel CLI with access to the move-home team.
+# Vercel CLI 56 rejects the old --yes flag on `alias set`; --non-interactive replaces it.
+# Requires an authenticated Vercel CLI on the move-home team.
 set -euo pipefail
 
 ALIAS=demo.movehome.org
@@ -19,5 +20,5 @@ if [ -z "$target" ]; then
 fi
 
 echo "flipping $ALIAS -> $target"
-vercel alias set "$target" "$ALIAS" --scope "$SCOPE" --yes
+vercel alias set "$target" "$ALIAS" --scope "$SCOPE" --non-interactive
 curl -fsS --max-time 10 "https://$ALIAS/api/health"

@@ -31,7 +31,7 @@ scripts/demo/rollback-demo.sh              # re-point demo.movehome.org at the c
 scripts/demo/rollback-demo.sh dpl_previous # flip to a specific earlier build
 ```
 
-That is one `vercel alias set … --yes`. Nothing is rebuilt and no code is
+That is one `vercel alias set …`. Nothing is rebuilt and no code is
 touched, so recovery does not depend on CI, git or Supabase. Measured alias
 write latency is ~43 s; budget one minute end to end, then re-check `/api/health`.
 
@@ -39,11 +39,19 @@ write latency is ~43 s; budget one minute end to end, then re-check `/api/health
 
 ```bash
 vercel deploy --prod --scope move-home          # note the printed dpl_… and *.vercel.app URL
-vercel alias set <dpl_id> demo.movehome.org --scope move-home --yes
+vercel alias set <dpl_id> demo.movehome.org --scope move-home
 # update deployment_id / deployment_url / pinned_at in docs/ops/expo-demo-pin.json and merge
 ```
 
 Pin only after `/api/health` on the alias returns the new `deployment_url`.
+
+## Host wiring
+
+| item | value |
+| --- | --- |
+| Vercel project | `movehome-demo` (team `move-home`) |
+| DNS | `CNAME demo` → `b325cf8404325006.vercel-dns-016.com` at GoDaddy, the existing `movehome.org` zone — no new zone, no NS change |
+| TLS | issued by Vercel once the CNAME resolves |
 
 ## Demo build env
 
