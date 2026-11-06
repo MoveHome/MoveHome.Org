@@ -226,7 +226,6 @@ describe('telegram search path', () => {
   });
 
   it('telegram: search reply is served by the existing search handler', async () => {
-    rpc.mockResolvedValue({ data: true, error: null });
     const handler = vi.fn(async () => ({ summary: 'Found 1 listing.', artifacts: [] }));
     resolveSkillMock.mockReturnValue(handler);
 
