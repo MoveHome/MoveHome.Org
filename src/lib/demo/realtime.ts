@@ -2,6 +2,8 @@
 // The broadcast is only a nudge — the TV's authoritative rows come from its own
 // venue-scoped feed RPC — so a failed ping is logged and never fails the write.
 
+import { createClient } from '@supabase/supabase-js';
+
 export interface ListingBroadcast {
   id: string;
   venue_id: string;
@@ -43,4 +45,33 @@ export async function broadcastListingReceived(listing: ListingBroadcast): Promi
     console.error('demo broadcast failed', { correlation_id: listing.correlation_id, error });
     return false;
   }
+}
+
+// Receive-only join for the TV screen. The join result is deliberately not
+// exposed: a JOINED/SUBSCRIBED reply proves nothing about the data, so the
+// caller treats every broadcast as a wake-up ping and lets reconciliation
+// decide whether what is on screen is current. Without NEXT_PUBLIC_DEMO_*
+// the screen runs reconciliation-only, which is the safe direction.
+export function tvChannel(
+  venueId: string,
+  onListingReceived: (listing: ListingBroadcast) => void
+): { close: () => void } {
+  const url = process.env.NEXT_PUBLIC_DEMO_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_DEMO_SUPABASE_ANON_KEY;
+  if (!url || !key) return { close: () => {} };
+
+  const channel = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } }).channel(
+    `venue:${venueId}`,
+    { config: { broadcast: { self: false } } }
+  );
+  channel.on('broadcast', { event: 'listing.received' }, ({ payload }) =>
+    onListingReceived(payload as ListingBroadcast)
+  );
+  channel.subscribe();
+
+  return {
+    close: () => {
+      void channel.unsubscribe();
+    }
+  };
 }
