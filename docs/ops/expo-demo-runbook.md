@@ -71,3 +71,52 @@ Pin only after `/api/health` on the alias returns the new `deployment_url`.
 - PR deploy previews on this repo need the Vercel team Git integration authorised;
   CLI `vercel deploy` is unaffected by that gap, which is why pinning is done from
   the CLI.
+
+
+## Telegram channel (@MoveHomeDemoBot)
+
+A QR scan at the booth opens `@MoveHomeDemoBot`; a photo plus a caption becomes a
+live listing at `https://demo.movehome.org/l/<id>`. The bot is a thin Next route
+(`src/app/api/telegram/webhook/route.ts`) — no side service, no bot SDK.
+
+### Env (demo build)
+
+| var | purpose |
+| --- | --- |
+| `TELEGRAM_BOT_TOKEN` | Bot API token from @BotFather — used to send replies |
+| `TELEGRAM_WEBHOOK_SECRET` | random string; Telegram echoes it in the `x-telegram-bot-api-secret-token` header on every call. Missing or different → 401, nothing written |
+| `DEMO_PUBLIC_ORIGIN` | optional override of the origin the webhook POSTs to (defaults to the incoming request origin); set it to `https://demo.movehome.org` |
+| `DEMO_SESSION_SECRET` | signs both the QR venue session code and the 120 s venue token |
+
+### Register the webhook
+
+```bash
+curl -sS "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \
+  -d "url=https://demo.movehome.org/api/telegram/webhook" \
+  -d "secret_token=$TELEGRAM_WEBHOOK_SECRET"
+curl -sS "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/getWebhookInfo" | jq '{url, last_error_message, pending_update_count}'
+```
+
+`setWebhook` must carry the same `secret_token` the build holds in
+`TELEGRAM_WEBHOOK_SECRET`; a mismatch makes every update a 401.
+
+### Mint the booth QR
+
+```bash
+DEMO_SESSION_SECRET=… node scripts/demo/mint-venue-session.mjs booth-a 480
+```
+
+It prints `https://t.me/MoveHomeDemoBot?start=v1.…` — encode that URL in the QR.
+The code is capped at 64 chars because Telegram limits deep-link `start` payloads;
+the script exits non-zero if a venue id would overflow it. TTL is in minutes.
+
+### Session expiry and limits
+
+A venue session expires (default 480 minutes ≈ one expo day, and the QR code's own
+expiry is inside the code). After that the bot replies "scan the booth QR" and
+writes nothing — the booth must re-mint and re-print the QR for the next day.
+
+Writes are rate-limited in `demo_telegram_ingest` (3 listings per rolling 10
+minutes per Telegram user, 100 active demo listings overall); the 4th comes back as
+a 429 reply. Replayed Telegram updates (`update_id`) are idempotent — one row, one
+broadcast.
