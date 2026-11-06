@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": false,
   "license": "MIT",
-  "description": "movehome.org \u2014 reference open-source RAIA Protocol consumer. Not-for-profit property listing aggregator.",
+  "description": "movehome.org — reference open-source RAIA Protocol consumer. Not-for-profit property listing aggregator.",
   "homepage": "https://movehome.org",
   "repository": {
     "type": "git",
@@ -27,8 +27,11 @@
     "@supabase/supabase-js": "^2.45.0",
     "canonicalize": "^3.0.0",
     "jose": "^6.2.3",
+    "leaflet": "^1.9.4",
     "next": "^15.5.18",
     "next-themes": "^0.4.6",
+    "pmtiles": "^4.5.0",
+    "protomaps-leaflet": "^5.1.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "zod": "^3.25.76"
