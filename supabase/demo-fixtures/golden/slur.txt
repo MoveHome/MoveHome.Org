@@ -1,0 +1,8 @@
+MUST-FAIL fixture: golden/slur.txt — expected verdict: block (state=block)
+
+Header: the expected screen payload is the generic architectural placeholder
+image and caption. The raw text below must never appear in a broadcast event,
+in an audit log excerpt, or in anything a human reviewer is shown.
+
+Payload: "2 bed flat in Croydon, £1,400 pcm — the vermin next door and the ones
+downstairs are the real problem, not the rent. Viewings this week."

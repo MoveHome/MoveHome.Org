@@ -5,7 +5,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { SignJWT } from 'jose';
 
 const rpc = vi.fn();
-vi.mock('@supabase/supabase-js', () => ({ createClient: () => ({ rpc }) }));
+const storageFrom = vi.fn(() => ({
+  list: vi.fn().mockResolvedValue({ data: [], error: null }),
+  remove: vi.fn().mockResolvedValue({ data: [], error: null })
+}));
+vi.mock('@supabase/supabase-js', () => ({
+  createClient: () => ({ rpc, storage: { from: storageFrom } })
+}));
 
 const { POST: ingest } = await import('@/app/api/demo/ingest/route');
 const { POST: retract } = await import('@/app/api/demo/retract/route');

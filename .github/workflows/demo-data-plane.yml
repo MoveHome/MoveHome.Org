@@ -22,3 +22,18 @@ jobs:
         env:
           DEMO_SUPABASE_DB_URL: ${{ secrets.DEMO_SUPABASE_DB_URL }}
         run: npm run test:demo
+
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - name: Consent, moderation and retract unit gates
+        run: npm test
+      - name: Typecheck
+        run: npm run typecheck
