@@ -8,6 +8,7 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { jwtVerify } from 'jose';
 import { z } from 'zod';
+import { retractListing, type RetractClient } from '@/lib/demo/retract';
 
 export const dynamic = 'force-dynamic';
 
@@ -61,16 +62,20 @@ export async function POST(request: Request) {
   }
 
   const db = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
-  const { data, error } = await db.rpc('demo_retract_listing', {
-    p_id: parsed.data.id,
-    p_retract_code: parsed.data.retract_code
+  // Budget: 60 s end to end (RETRACT_BUDGET_MS) — the row and its media go in
+  // one demo beat, so the audience watches the deletion happen.
+  const outcome = await retractListing(db as unknown as RetractClient, {
+    venue_id: venue,
+    id: parsed.data.id,
+    retract_code: parsed.data.retract_code
   });
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 400 });
-  }
-  if (data !== true) {
-    return NextResponse.json({ error: 'not found, wrong code, or a seeded row' }, { status: 404 });
+  if (!outcome.retracted) {
+    const status = outcome.reason === 'over_budget' ? 504 : outcome.reason === 'refused' ? 404 : 400;
+    return NextResponse.json({ error: outcome.message }, { status });
   }
 
-  return NextResponse.json({ retracted: parsed.data.id }, { status: 200 });
+  return NextResponse.json(
+    { retracted: parsed.data.id, elapsed_ms: outcome.elapsed_ms, media_removed: outcome.media_removed },
+    { status: 200 }
+  );
 }

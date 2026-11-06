@@ -1,0 +1,5 @@
+- `golden/slur.txt` — asserts verdict `block`: property-shaped text with a harassment-grade insult must never reach the screen.
+- `golden/face.png` — asserts verdict `block`: an identifiable close-up face must never reach the screen.
+- Both assert the broadcast payload is the generic architectural placeholder, never the raw text or photo.
+- A human reviews the REDACTED OUTPUT and the stored `moderation_verdict`; a green tick alone is not review.
+- `face.png` is synthetic (generated with Pillow) and must be swapped for a real consented photo with a signed release before the expo.
