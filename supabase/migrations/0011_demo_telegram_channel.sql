@@ -28,11 +28,68 @@ revoke all on table public.demo_telegram_sessions from public;
 revoke all on table public.demo_telegram_sessions from anon, authenticated;
 alter table public.demo_telegram_sessions enable row level security;
 
+-- ── session binding ────────────────────────────────────────────────────────
+-- No table grant and no policy exists for the API roles, so the webhook reads
+-- and writes the binding through these two definer functions and nothing else.
+create or replace function public.demo_telegram_bind_session(
+    p_chat_id           bigint,
+    p_telegram_user_id  bigint,
+    p_venue_id          text,
+    p_session_exp       timestamptz
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+    if coalesce(btrim(p_venue_id), '') = '' or p_session_exp is null then
+        raise exception 'demo_telegram_bind_session: venue_id and session_exp are required' using errcode = '22023';
+    end if;
+
+    insert into public.demo_telegram_sessions (
+        chat_id, telegram_user_id, venue_id, session_exp, created_at, updated_at
+    ) values (
+        p_chat_id, p_telegram_user_id, p_venue_id, p_session_exp, now(), now()
+    )
+    on conflict (chat_id) do update
+       set telegram_user_id  = excluded.telegram_user_id,
+           venue_id          = excluded.venue_id,
+           session_exp       = excluded.session_exp,
+           read_count        = 0,
+           read_window_start = null,
+           updated_at        = now();
+
+    return true;
+end;
+$$;
+
+-- The live session for a chat, or null. Expiry is decided here: a caller
+-- never sees a stale venue.
+create or replace function public.demo_telegram_session_for(p_chat_id bigint)
+returns jsonb
+language sql
+security definer
+set search_path = public, pg_temp
+as $$
+    select jsonb_build_object(
+               'venue_id',         s.venue_id,
+               'telegram_user_id', s.telegram_user_id,
+               'session_exp',      s.session_exp
+           )
+      from public.demo_telegram_sessions s
+     where s.chat_id = p_chat_id
+       and s.session_exp > now();
+$$;
+
 -- ── idempotency columns on the listing table ───────────────────────────────
 alter table public.demo_listings
     add column if not exists telegram_user_id   bigint,
     add column if not exists telegram_update_id bigint,
-    add column if not exists correlation_id     text;
+    add column if not exists correlation_id     text,
+    -- Telegram's only durable handle on the booth photo. The TV lane owns the
+    -- rendered photo_url; this column just keeps the file_id from being lost.
+    add column if not exists photo_file_id      text;
 
 -- One row per Telegram update: webhook retries replay the same update_id.
 create unique index if not exists ux_demo_listings_telegram_update
@@ -110,7 +167,7 @@ begin
         venue_id, raia_id, headline, property_type, service_type,
         bedrooms, rent_pcm, currency, un_locode, latitude, longitude,
         is_demo, is_seed, retract_code,
-        telegram_user_id, telegram_update_id, correlation_id
+        telegram_user_id, telegram_update_id, correlation_id, photo_file_id
     ) values (
         v_venue,
         p_listing ->> 'raia_id',
@@ -128,7 +185,8 @@ begin
         v_code,
         p_telegram_user_id,
         p_telegram_update_id,
-        p_correlation_id
+        p_correlation_id,
+        p_listing ->> 'photo_file_id'
     )
     on conflict (telegram_user_id, telegram_update_id) where telegram_update_id is not null
     do nothing
@@ -202,7 +260,7 @@ as $$
       from (
         select id, venue_id, headline, property_type, service_type,
                bedrooms, rent_pcm, currency, un_locode, latitude, longitude,
-               created_at
+               photo_file_id, created_at
           from public.demo_listings
          where id = p_id
       ) t;
@@ -211,7 +269,11 @@ $$;
 revoke all on function public.demo_telegram_ingest(bigint, bigint, bigint, text, jsonb) from public;
 revoke all on function public.demo_telegram_read_allowed(bigint) from public;
 revoke all on function public.demo_get_listing(uuid) from public;
+revoke all on function public.demo_telegram_bind_session(bigint, bigint, text, timestamptz) from public;
+revoke all on function public.demo_telegram_session_for(bigint) from public;
 
 grant execute on function public.demo_telegram_ingest(bigint, bigint, bigint, text, jsonb) to anon, authenticated;
 grant execute on function public.demo_telegram_read_allowed(bigint) to anon, authenticated;
 grant execute on function public.demo_get_listing(uuid) to anon, authenticated;
+grant execute on function public.demo_telegram_bind_session(bigint, bigint, text, timestamptz) to anon, authenticated;
+grant execute on function public.demo_telegram_session_for(bigint) to anon, authenticated;

@@ -12,6 +12,7 @@ interface DemoListing {
   rent_pcm: number | null;
   currency: string | null;
   un_locode: string | null;
+  photo_file_id: string | null;
   created_at: string | null;
 }
 
@@ -55,6 +56,9 @@ export default async function DemoLiveListingPage({ params }: { params: Promise<
           <dd>{listing.property_type ?? '—'}</dd>
         </div>
       </dl>
+      {listing.photo_file_id ? (
+        <p className="mt-4 text-sm text-neutral-600">Photo sent at the booth (stored for the demo board).</p>
+      ) : null}
       <p className="mt-8 text-sm text-neutral-500">
         Booth: {listing.venue_id}
         {listing.un_locode ? ` · ${listing.un_locode}` : ''}

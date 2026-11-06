@@ -36,7 +36,8 @@ const Listing = z
     currency: z.string().regex(/^[A-Z]{3}$/).optional(),
     un_locode: z.string().regex(/^[A-Za-z]{2}[A-Za-z0-9]{3}$/).optional(),
     latitude: z.number().min(-90).max(90).optional(),
-    longitude: z.number().min(-180).max(180).optional()
+    longitude: z.number().min(-180).max(180).optional(),
+    photo_file_id: z.string().min(1).max(255).optional()
   })
   .strict();
 
@@ -144,7 +145,17 @@ export async function POST(request: Request) {
       return NextResponse.json({ id: row.id, duplicate: true }, { status: 200 });
     }
 
-    await broadcastListingReceived({ ...row, venue_id: venue, correlation_id });
+    await broadcastListingReceived({
+      id: row.id,
+      venue_id: venue,
+      headline: row.headline ?? null,
+      bedrooms: row.bedrooms ?? null,
+      rent_pcm: row.rent_pcm ?? null,
+      currency: row.currency ?? null,
+      un_locode: row.un_locode ?? null,
+      created_at: row.created_at ?? null,
+      correlation_id
+    });
 
     return NextResponse.json({ id: row.id, duplicate: false }, { status: 201 });
   }

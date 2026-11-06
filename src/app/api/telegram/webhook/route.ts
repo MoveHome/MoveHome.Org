@@ -52,34 +52,36 @@ interface VenueSession {
   telegram_user_id: number;
 }
 
-// The venue for a message is ONLY this row — never the message content.
+// The demo_telegram_sessions table has RLS on and no API grant at all, so both
+// directions go through its definer functions. The venue for a message is ONLY
+// that row — never the message content.
 async function sessionFor(chatId: number): Promise<VenueSession | null> {
   const db = demoDb();
   if (!db) return null;
-  const { data, error } = await db
-    .from('demo_telegram_sessions')
-    .select('venue_id, telegram_user_id, session_exp')
-    .eq('chat_id', chatId)
-    .maybeSingle();
+  const { data, error } = await db.rpc('demo_telegram_session_for', { p_chat_id: chatId });
   if (error || !data) return null;
-  if (new Date(data.session_exp as string).getTime() <= Date.now()) return null;
-  return { venue_id: data.venue_id as string, telegram_user_id: Number(data.telegram_user_id) };
+  const row = data as { venue_id?: string; telegram_user_id?: number | string };
+  if (!row.venue_id) return null;
+  return { venue_id: row.venue_id, telegram_user_id: Number(row.telegram_user_id) };
 }
 
 async function bindSession(chatId: number, telegramUserId: number, session: { venue_id: string; session_exp: string }) {
   const db = demoDb();
   if (!db) return false;
-  const { error } = await db.from('demo_telegram_sessions').upsert(
-    {
-      chat_id: chatId,
-      telegram_user_id: telegramUserId,
-      venue_id: session.venue_id,
-      session_exp: session.session_exp,
-      updated_at: new Date().toISOString()
-    },
-    { onConflict: 'chat_id' }
-  );
+  const { error } = await db.rpc('demo_telegram_bind_session', {
+    p_chat_id: chatId,
+    p_telegram_user_id: telegramUserId,
+    p_venue_id: session.venue_id,
+    p_session_exp: session.session_exp
+  });
   return !error;
+}
+
+// Telegram sends every size of the same photo; the last entry is the largest.
+function photoFileId(photo: unknown): string | undefined {
+  const sizes = Array.isArray(photo) ? photo : [];
+  const last = sizes[sizes.length - 1] as { file_id?: unknown } | undefined;
+  return typeof last?.file_id === 'string' ? last.file_id : undefined;
 }
 
 async function reply(chatId: number, text: string): Promise<void> {
@@ -172,8 +174,10 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: true });
   }
 
-  const intent = await extractListingIntent({ text, photo: message.photo });
-  const looksLikeListing = Boolean(message.photo) || /\d/.test(text) && /£|\bpcm\b/i.test(text);
+  const photo = photoFileId(message.photo);
+  const intent = await extractListingIntent({ text, photo });
+  // Photo-led (D2): a caption alone is a search, even when it quotes a price.
+  const looksLikeListing = Boolean(photo);
 
   if (!looksLikeListing) {
     if (!(await readAllowed(chatId))) {
@@ -229,12 +233,15 @@ export async function POST(request: Request) {
     service_type: intent.service_type,
     ...(intent.bedrooms !== undefined ? { bedrooms: intent.bedrooms } : {}),
     ...(intent.rent_pcm !== undefined ? { rent_pcm: intent.rent_pcm } : {}),
-    currency: intent.currency
+    currency: intent.currency,
+    ...(photo ? { photo_file_id: photo } : {})
   });
 
+  // 5xx, not 200: a failed write must be retried by Telegram, and a replay
+  // returns duplicate:true instead of a second row.
   if (!res) {
     await reply(chatId, 'Could not save that listing — please try again.');
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ error: 'ingest unreachable' }, { status: 502 });
   }
   if (res.status === 429) {
     await reply(chatId, 'That is 3 listings in 10 minutes per person — give it a few minutes.');
@@ -243,7 +250,7 @@ export async function POST(request: Request) {
   if (!res.ok) {
     console.error('telegram ingest refused', { correlation_id: correlationId, status: res.status });
     await reply(chatId, 'Could not save that listing — please try again.');
-    return NextResponse.json({ ok: true });
+    return NextResponse.json({ error: 'ingest refused' }, { status: 502 });
   }
 
   const data = (await res.json().catch(() => ({}))) as { id?: string };

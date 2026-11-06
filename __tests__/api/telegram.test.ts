@@ -4,13 +4,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { SignJWT, jwtVerify } from 'jose';
 
-const { rpc, from, resolveSkillMock } = vi.hoisted(() => ({
+const { rpc, resolveSkillMock } = vi.hoisted(() => ({
   rpc: vi.fn(),
-  from: vi.fn(),
   resolveSkillMock: vi.fn()
 }));
 
-vi.mock('@supabase/supabase-js', () => ({ createClient: () => ({ rpc, from }) }));
+vi.mock('@supabase/supabase-js', () => ({ createClient: () => ({ rpc }) }));
 vi.mock('@/lib/a2a/skills', () => ({ resolveSkill: (id: string) => resolveSkillMock(id) }));
 
 const SECRET = 'test-secret-test-secret-test-secret';
@@ -92,7 +91,6 @@ function replies(): string[] {
 
 beforeEach(() => {
   rpc.mockReset();
-  from.mockReset();
   resolveSkillMock.mockReset();
   fetchMock.mockReset();
   vi.stubGlobal('fetch', fetchMock);
@@ -104,11 +102,13 @@ beforeEach(() => {
     return new Response('{}', { status: 200 });
   });
 
-  // The session row the webhook resolves the venue from.
-  from.mockImplementation(() => ({
-    select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: SESSION, error: null }) }) }),
-    upsert: async () => ({ error: null })
-  }));
+  // Session binding lives behind two definer RPCs: anon has no table grant.
+  rpc.mockImplementation(async (name: string) => {
+    if (name === 'demo_telegram_session_for') return { data: SESSION, error: null };
+    if (name === 'demo_telegram_bind_session') return { data: true, error: null };
+    if (name === 'demo_telegram_read_allowed') return { data: true, error: null };
+    return { data: null, error: null };
+  });
 
   process.env.DEMO_SESSION_SECRET = SECRET;
   process.env.DEMO_WRITE_ENABLED = 'true';
@@ -124,6 +124,12 @@ afterEach(() => {
 
 describe('telegram ingest path', () => {
   it('telegram: ingest without a venue session token → 403, zero rows', async () => {
+    // No token at all: refused before any RPC is reached.
+    const anonymous = await ingest(post('/api/demo/ingest', { venue_id: VENUE, listing: LISTING }));
+    expect(anonymous.status).toBe(401);
+    expect(rpc).not.toHaveBeenCalled();
+
+    // Signed token, but the chat holds no live session row.
     rpc.mockResolvedValueOnce({ data: null, error: { code: '42501', message: 'no venue session for this chat' } });
 
     const res = await ingest(
@@ -162,6 +168,8 @@ describe('telegram ingest path', () => {
     expect(statuses).toEqual([201, 201, 201, 429]);
     // Three rows written, three broadcasts — the throttled 4th wrote nothing.
     expect(broadcastCalls()).toHaveLength(3);
+    // Every count was keyed on the verified telegram_user_id, never the body.
+    expect(rpc.mock.calls.map((c) => (c[1] as Record<string, unknown>).p_telegram_user_id)).toEqual([111, 111, 111, 111]);
   });
 
   it('telegram: replayed update_id → exactly one row', async () => {
@@ -200,7 +208,10 @@ describe('telegram ingest path', () => {
 
 describe('telegram search path', () => {
   it('telegram: rate check error fails OPEN for reads', async () => {
-    rpc.mockRejectedValue(new Error('read ledger unavailable'));
+    rpc.mockImplementation(async (name: string) => {
+      if (name === 'demo_telegram_session_for') return { data: SESSION, error: null };
+      throw new Error('read ledger unavailable');
+    });
     resolveSkillMock.mockReturnValue(async () => ({ summary: 'Found 2 listings.', artifacts: [] }));
 
     const res = await webhook(
@@ -230,6 +241,22 @@ describe('telegram search path', () => {
     expect(handler).toHaveBeenCalledTimes(1);
     expect(replies()).toContain('Found 1 listing.');
   });
+
+  it('telegram: a price-only caption is served by search, not the listing branch', async () => {
+    const handler = vi.fn(async () => ({ summary: 'Found 3 listings.', artifacts: [] }));
+    resolveSkillMock.mockReturnValue(handler);
+
+    await webhook(
+      webhookUpdate({
+        update_id: 41,
+        message: { chat: { id: 5 }, from: { id: 111 }, text: '2 bed flat under £2000 pcm' }
+      })
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(ingestCalls()).toHaveLength(0);
+    expect(replies()).toContain('Found 3 listings.');
+  });
 });
 
 describe('telegram intent extractor', () => {
@@ -246,8 +273,6 @@ describe('telegram intent extractor', () => {
 
 describe('telegram identity', () => {
   it('telegram: rate-limit key comes from the verified token, not the body', async () => {
-    rpc.mockResolvedValue({ data: true, error: null });
-
     await webhook(
       webhookUpdate({
         update_id: 21,
@@ -257,7 +282,7 @@ describe('telegram identity', () => {
           chat: { id: 5 },
           from: { id: 111 },
           text: '£1500 2 bed flat in Shoreditch',
-          photo: [{ file_id: 'photo-1' }]
+          photo: [{ file_id: 'small' }, { file_id: 'photo-1' }]
         }
       })
     );
@@ -271,7 +296,32 @@ describe('telegram identity', () => {
 
     expect(payload.telegram_user_id).toBe(111);
     expect(payload.update_id).toBe(21);
+    // The largest photo's file_id is retained on the write.
+    expect(JSON.parse(String((call[1] as RequestInit).body)).listing.photo_file_id).toBe('photo-1');
+    // The venue came from the definer RPC, never a table read.
+    expect(rpc).toHaveBeenCalledWith('demo_telegram_session_for', { p_chat_id: 5 });
     // The write path never consults the read ledger (distinct call sites).
     expect(rpc).not.toHaveBeenCalledWith('demo_telegram_read_allowed', expect.anything());
+  });
+});
+
+describe('telegram chat session', () => {
+  it('telegram: /start binds the chat through the definer RPC', async () => {
+    const { createHmac } = await import('node:crypto');
+    const expBase36 = Math.floor((Date.now() + 3_600_000) / 1000).toString(36);
+    const tag = createHmac('sha256', SECRET).update(`v1.${VENUE}.${expBase36}`).digest('base64url').slice(0, 16);
+
+    const res = await webhook(
+      webhookUpdate({
+        update_id: 31,
+        message: { chat: { id: 5 }, from: { id: 111 }, text: `/start v1.${VENUE}.${expBase36}.${tag}` }
+      })
+    );
+
+    expect(res.status).toBe(200);
+    expect(rpc).toHaveBeenCalledWith(
+      'demo_telegram_bind_session',
+      expect.objectContaining({ p_chat_id: 5, p_telegram_user_id: 111, p_venue_id: VENUE })
+    );
   });
 });
