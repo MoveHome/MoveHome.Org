@@ -60,7 +60,7 @@ jobs:
       - uses: actions/setup-node@v4
         id: setup
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
 
       # Fail in ~5s with a clear annotation instead of a bare exit 3 from the
