@@ -92,18 +92,42 @@ describe('moderation fails closed to the placeholder', () => {
 });
 
 describe('retract budget and seeded rows', () => {
-  function client(rpcResult: { data: unknown; error: { message: string } | null }) {
-    const remove = vi.fn().mockResolvedValue({ data: [], error: null });
-    const list = vi.fn().mockResolvedValue({ data: [{ name: 'photo.jpg' }], error: null });
+  // Two-phase contract (ADR-476 D4): begin marks the row deleting and hands back
+  // the media prefix; finalize runs only after the prefix reads back empty.
+  function client(options: {
+    begin: { id: string; venue_id: string; media_prefix: string } | null;
+    finalize?: unknown;
+    objects?: string[];
+  }) {
+    const media = new Set(options.objects ?? ['venue-a/l3/photo.jpg']);
+    const remove = vi.fn(async (paths: string[]) => {
+      for (const path of paths) media.delete(path);
+      return { data: paths.length, error: null };
+    });
+    const list = vi.fn(async (prefix: string, opts?: { offset?: number }) => {
+      const keys = [...media].filter((key) => key.startsWith(`${prefix}/`)).sort();
+      return {
+        data: keys.slice(opts?.offset ?? 0).map((key) => ({
+          name: key.slice(prefix.length + 1),
+          id: `obj-${key}`,
+          metadata: { size: 10 }
+        })),
+        error: null
+      };
+    });
     return {
-      rpc: vi.fn().mockResolvedValue(rpcResult),
+      rpc: vi.fn(async (fn: string) =>
+        fn === 'demo_retract_begin'
+          ? { data: options.begin, error: null }
+          : { data: options.finalize ?? true, error: null }
+      ),
       storage: { from: () => ({ list, remove }) },
       remove
     };
   }
 
-  it('deletes row and media inside the 60000 ms budget', async () => {
-    const db = client({ data: true, error: null });
+  it('deletes media, then the row, inside the 60000 ms budget', async () => {
+    const db = client({ begin: { id: 'l3', venue_id: 'venue-a', media_prefix: 'venue-a/l3' } });
     const res = await retractListing(db, { venue_id: 'venue-a', id: 'l3', retract_code: '1234' });
     expect(RETRACT_BUDGET_MS).toBe(60000);
     expect(res.retracted).toBe(true);
@@ -112,10 +136,14 @@ describe('retract budget and seeded rows', () => {
       expect(res.elapsed_ms).toBeLessThan(60000);
     }
     expect(db.remove).toHaveBeenCalledWith(['venue-a/l3/photo.jpg']);
+    expect(db.rpc.mock.calls.map((call) => call[0])).toEqual([
+      'demo_retract_begin',
+      'demo_retract_finalize'
+    ]);
   });
 
   it('refuses a seeded row because is_seed rows are not retractable', async () => {
-    const db = client({ data: false, error: null });
+    const db = client({ begin: null });
     const res = await retractListing(db, { venue_id: 'venue-a', id: 'seed-1', retract_code: '1234' });
     expect(res.retracted).toBe(false);
     if (!res.retracted) {

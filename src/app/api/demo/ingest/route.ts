@@ -160,7 +160,22 @@ export async function POST(request: Request) {
     return NextResponse.json({ id: row.id, duplicate: false }, { status: 201 });
   }
 
-  // ── venue session branch (unchanged) ─────────────────────────────────────
+  // ── venue session branch ─────────────────────────────────────────────────
+  // ADR-476 D4: no new row for a listing that is being deleted or has expired.
+  // A guard that cannot be read fails closed. (The Telegram branch is guarded by
+  // demo_telegram_ingest's own rate/venue checks; future uploaded media must
+  // register key, bytes and sha256 in public.demo_media_manifest.)
+  const retention = await db.rpc('demo_ingest_blocked', {
+    p_venue_id: venue,
+    p_raia_id: parsed.data.listing.raia_id
+  });
+  if (retention.error) {
+    return NextResponse.json({ error: 'retention state unavailable' }, { status: 503 });
+  }
+  if (retention.data === true) {
+    return NextResponse.json({ status: 'deletion_pending', error: 'listing is being deleted' }, { status: 409 });
+  }
+
   const { data, error } = await db.rpc('demo_ingest_listing', {
     p_venue_id: venue,
     p_listing: parsed.data.listing
