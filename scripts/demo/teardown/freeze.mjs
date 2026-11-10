@@ -34,5 +34,5 @@ export async function run({ register, manifest, provider, env = process.env, now
 export const ok = (result) => result.status === 'PASS';
 
 if (typeof process !== 'undefined') {
-  await runStageCli('FREEZE_RECHECK', 'freeze.json', (ctx) => run(ctx));
+  await runStageCli('FREEZE_RECHECK', 'freeze.json', (ctx) => run(ctx), import.meta.url);
 }

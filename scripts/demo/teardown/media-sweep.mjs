@@ -68,5 +68,5 @@ export async function run({ register, manifest, provider, pageSize = 100, now = 
 export const ok = (result) => result.status === 'PASS';
 
 if (typeof process !== 'undefined') {
-  await runStageCli('MEDIA', 'media-summary.json', run);
+  await runStageCli('MEDIA', 'media-summary.json', run, import.meta.url);
 }

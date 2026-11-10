@@ -76,5 +76,5 @@ export async function run({ register, manifest, provider, now = new Date() }) {
 export const ok = (result) => result.status === 'PASS';
 
 if (typeof process !== 'undefined') {
-  await runStageCli('CHANNELS', 'channels.json', run);
+  await runStageCli('CHANNELS', 'channels.json', run, import.meta.url);
 }

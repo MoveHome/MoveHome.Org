@@ -53,5 +53,5 @@ export async function run({ register, manifest, provider, accountProjects = [], 
 export const ok = (result) => result.status === 'PASS';
 
 if (typeof process !== 'undefined') {
-  await runStageCli('PREFLIGHT', 'preflight.json', run);
+  await runStageCli('PREFLIGHT', 'preflight.json', run, import.meta.url);
 }

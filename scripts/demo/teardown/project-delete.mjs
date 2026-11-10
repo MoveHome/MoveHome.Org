@@ -48,5 +48,5 @@ export async function run({ register, manifest, provider, media, now = new Date(
 export const ok = (result) => result.status === 'PASS';
 
 if (typeof process !== 'undefined') {
-  await runStageCli('DATABASE', 'database.json', run);
+  await runStageCli('DATABASE', 'database.json', run, import.meta.url);
 }

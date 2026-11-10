@@ -731,9 +731,13 @@ export function liveProvider(env = process.env) {
 // ── stage CLI ───────────────────────────────────────────────────────────────
 // Each stage script is runnable on its own; the evidence directory is the only
 // shared state between stages. Live only: fixtures never come through here.
-export async function runStageCli(stage, evidenceName, runStage) {
+// `moduleUrl` must be the caller's own import.meta.url: comparing against this
+// module's URL never matches argv[1], which silently turned every stage into a
+// no-op exit 0.
+export async function runStageCli(stage, evidenceName, runStage, moduleUrl) {
+  if (!moduleUrl) throw new Error(`${stage}: runStageCli needs the caller's import.meta.url`);
   const { pathToFileURL } = await import('node:url');
-  const invoked = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+  const invoked = process.argv[1] && moduleUrl === pathToFileURL(process.argv[1]).href;
   if (!invoked) return null;
 
   const args = process.argv.slice(2);

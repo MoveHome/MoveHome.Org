@@ -46,5 +46,5 @@ export async function run({ register, manifest, provider, now = new Date() }) {
 export const ok = (result) => result.status === 'PASS';
 
 if (typeof process !== 'undefined') {
-  await runStageCli('DNS_HOSTING', 'dns-hosting.json', run);
+  await runStageCli('DNS_HOSTING', 'dns-hosting.json', run, import.meta.url);
 }

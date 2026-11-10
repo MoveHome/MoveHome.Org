@@ -1,5 +1,7 @@
 // ADR-476 D14/D15: the eleven synthetic fixtures are the acceptance contract.
 // They run against the synthetic provider adapter only — no live mutation.
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 type Fixture = {
@@ -78,4 +80,34 @@ describe('teardown contract fixtures (synthetic only)', () => {
     expect(media.objects_after).toBe(0);
     expect(['PROVIDER_RETAINED', 'EXPIRED', 'UNKNOWN']).toContain(media.backup_retention);
   }, 120_000);
+
+  // A stage script whose entry-point check never fires exits 0 having done
+  // nothing — the exact false success a destructive tool must never emit.
+  it('every stage CLI refuses to run without --register and without --live', () => {
+    const root = fileURLToPath(new URL('../../', import.meta.url));
+    const stages = [
+      'preflight.mjs',
+      'freeze.mjs',
+      'media-sweep.mjs',
+      'project-delete.mjs',
+      'channels-revoke.mjs',
+      'dns-remove.mjs'
+    ];
+    for (const stage of stages) {
+      const bare = spawnSync(process.execPath, [`scripts/demo/teardown/${stage}`], {
+        cwd: root,
+        encoding: 'utf8'
+      });
+      expect({ stage, code: bare.status, err: bare.stderr }).toMatchObject({ code: 2 });
+      expect(bare.stderr).toContain('--register');
+
+      const synthetic = spawnSync(
+        process.execPath,
+        [`scripts/demo/teardown/${stage}`, '--register', 'unused.json'],
+        { cwd: root, encoding: 'utf8' }
+      );
+      expect({ stage, code: synthetic.status }).toMatchObject({ code: 2 });
+      expect(synthetic.stderr).toContain('--live');
+    }
+  }, 60_000);
 });
