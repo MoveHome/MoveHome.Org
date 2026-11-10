@@ -18,7 +18,15 @@
     "typecheck": "tsc --noEmit",
     "portal:create-credential": "node scripts/portal-create-credential.cjs",
     "test": "vitest run",
-    "test:demo": "bash scripts/demo/run-must-fail-fixtures.sh"
+    "test:demo": "bash scripts/demo/run-must-fail-fixtures.sh",
+    "demo:retention": "node scripts/demo/retention-sweep.mjs",
+    "demo:teardown:preflight": "node scripts/demo/teardown/preflight.mjs",
+    "demo:teardown:freeze": "node scripts/demo/teardown/freeze.mjs",
+    "demo:teardown:media": "node scripts/demo/teardown/media-sweep.mjs",
+    "demo:teardown:database": "node scripts/demo/teardown/project-delete.mjs",
+    "demo:teardown:channels": "node scripts/demo/teardown/channels-revoke.mjs",
+    "demo:teardown:dns": "node scripts/demo/teardown/dns-remove.mjs",
+    "demo:teardown:verify": "node scripts/demo/teardown/verify.mjs --fixture latest"
   },
   "dependencies": {
     "@a2a-js/sdk": "^0.3.13",

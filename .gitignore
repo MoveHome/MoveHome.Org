@@ -23,3 +23,6 @@ opencode.json
 /.claude/
 SESSION_BRIEF.md
 *.local
+
+# ADR-476 teardown evidence — redacted bundles stay on the operator box
+/artifacts/expo-t7/

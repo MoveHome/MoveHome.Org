@@ -120,3 +120,36 @@ Writes are rate-limited in `demo_telegram_ingest` (3 listings per rolling 10
 minutes per Telegram user, 100 active demo listings overall); the 4th comes back as
 a 429 reply. Replayed Telegram updates (`update_id`) are idempotent — one row, one
 broadcast.
+
+## Retention, T0 freeze and T+7 teardown (ADR-476)
+
+24-hour retention is **media first, row second**: a retracted or expired listing
+is marked `deleting` (gone from the broadcast view, TV feed and fingerprint), its
+media under `<venue_id>/<listing_id>/` is deleted recursively, and only a
+zero-object readback finalizes the row. A media failure leaves a non-public
+`deleting` row and returns `deletion_pending` — never a completed retraction.
+The worker runs from `npm run demo:retention -- --live` at least every 10 minutes;
+migration `0015_demo_retention_lifecycle.sql` replaces the 0010 row-only TTL.
+
+The 0010 `demo_teardown()` function is **not** teardown: it dropped two tables and
+two functions and left storage, channels, DNS and secrets live. It is retired by
+0015. Whole-project deletion, channel revocation, DNS retirement and the evidence
+bundle live in `docs/ops/expo-t7-teardown.md` and run only with Eugin's written
+approval of the dated manifest.
+
+### T0 freeze (public close)
+
+1. `DEMO_WRITE_ENABLED=false` and Vercel redeploy — the write plane fails closed.
+2. `deleteWebhook(drop_pending_updates=true)` for `@MoveHomeDemoBot`; disable any
+   WhatsApp subscription if it was provisioned.
+3. Stop booth session minting and broadcast/seed writers (the retention worker
+   keeps running).
+4. Record the actual `event_closed_at`; `delete_after = event_closed_at + 168 h`.
+5. 60 seconds later, prove a negative canary: an attendee write fails and no new
+   row or storage object appears.
+
+### T+7
+
+See `docs/ops/expo-t7-teardown.md` (preflight → freeze recheck → media → database
+→ channels → DNS → secrets/monitors → independent verify). Media proof is a hard
+dependency of project deletion.
