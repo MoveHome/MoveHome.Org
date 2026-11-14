@@ -49,6 +49,10 @@ function eaItem(raiaId: string) {
     bathrooms: 1,
     floor_area_sqm: null,
     available_from: '2026-10-09',
+    // v0.3 price field (live EA shape 2026-11-14): MoveHome stored NULL rent
+    // for every EA row while the mapper only read the v0.2 `rent_pcm`.
+    asking_rent_pcm: 2882,
+    rent_frequency: 'MONTHLY',
     currency: 'GBP',
     epc_rating: 'C',
     features: ['FURNISHED', 'BALCONY'],
@@ -161,6 +165,9 @@ describe('RAIA flat-A2A ingest (F8d)', () => {
     expect(Number.isNaN(Date.parse(row.synced_at as string))).toBe(false);
     expect(row.property_type).toBe('flat');
     expect(row.currency).toBe('GBP');
+    expect(row.rent_pcm).toBe(2882); // v0.3 asking_rent_pcm
+    expect(row.postcode_district).toBe('SW1W'); // v0.3 location.postcode_district
+    expect(row.listing_status).toBe('let_agreed'); // v0.3 LET_AGREED -> CHECK-safe enum
     expect(row.photo_url).toBe('https://cdn.example/1.jpg');
     expect(staleScans).toBe(1); // sweep armed only because rows were written
   });
