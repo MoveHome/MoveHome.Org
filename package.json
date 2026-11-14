@@ -20,6 +20,7 @@
     "test": "vitest run",
     "test:demo": "bash scripts/demo/run-must-fail-fixtures.sh",
     "demo:retention": "node scripts/demo/retention-sweep.mjs",
+    "demo:drills": "npx tsx scripts/demo/run-drills.ts",
     "demo:teardown:preflight": "node scripts/demo/teardown/preflight.mjs",
     "demo:teardown:freeze": "node scripts/demo/teardown/freeze.mjs",
     "demo:teardown:media": "node scripts/demo/teardown/media-sweep.mjs",
