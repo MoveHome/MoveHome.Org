@@ -39,12 +39,28 @@ const skillSchema = z
   })
   .passthrough();
 
+// A2A 1.0 AgentInterface (spec §4.4.6). passthrough() matters: the signature is
+// verified over the parsed card, so stripping an unknown key (e.g. `tenant`)
+// would turn a correctly signed card into signature_verified: false.
+const interfaceSchema = z
+  .object({
+    url: z.string().url().max(500),
+    protocolBinding: z.string().max(40).optional(),
+    protocolVersion: z.string().max(20).optional(),
+    tenant: z.string().max(200).optional()
+  })
+  .passthrough();
+
+// Accepts both card shapes: A2A 0.3 (top-level url / protocolVersion /
+// preferredTransport) and A2A 1.0 (those three move into supportedInterfaces[]).
+// ADR-472 V7 / a2a-v1-upgrade-design §3.5 (A).
 const cardSchema = z
   .object({
     protocolVersion: z.string().max(20).optional(),
     name: z.string().max(200).optional(),
     description: z.string().max(4000).optional(),
-    url: z.string().url().max(500),
+    url: z.string().url().max(500).optional(),
+    supportedInterfaces: z.array(interfaceSchema).min(1).max(20).optional(),
     preferredTransport: z.string().max(40).optional(),
     version: z.string().max(40).optional(),
     provider: z
@@ -61,9 +77,33 @@ const cardSchema = z
       .array(z.object({ protected: z.string(), signature: z.string(), header: z.record(z.unknown()).optional() }))
       .optional()
   })
-  .passthrough();
+  .passthrough()
+  .refine((c) => c.url !== undefined || c.supportedInterfaces !== undefined, {
+    message: 'Agent card must declare url (A2A 0.3) or supportedInterfaces (A2A 1.0).',
+    path: ['url']
+  });
 
 type ParsedCard = z.infer<typeof cardSchema>;
+
+/**
+ * The endpoint and protocol version the registry records. A 0.3 card's
+ * top-level fields win when present (unchanged behaviour). Otherwise the first
+ * JSONRPC interface (falling back to the first interface): the spec orders
+ * supportedInterfaces by preference, and the health probe speaks JSON-RPC.
+ */
+export function resolveCardEndpoint(card: Pick<ParsedCard, 'url' | 'protocolVersion' | 'preferredTransport' | 'supportedInterfaces'>): {
+  a2a_url: string | null;
+  protocol_version: string | null;
+  preferred_transport: string | null;
+} {
+  const ifaces = card.supportedInterfaces ?? [];
+  const iface = ifaces.find((i) => i.protocolBinding?.toUpperCase() === 'JSONRPC') ?? ifaces[0];
+  return {
+    a2a_url: card.url ?? iface?.url ?? null,
+    protocol_version: card.protocolVersion ?? iface?.protocolVersion ?? null,
+    preferred_transport: card.preferredTransport ?? iface?.protocolBinding ?? null
+  };
+}
 
 function fail(status: number, error: string, validation_errors?: { field: string; message: string; code: string }[]): IngestResult {
   return { ok: false, status, error, validation_errors };
@@ -208,15 +248,17 @@ export async function fetchAndValidateCard(wellKnownURI: string): Promise<Ingest
   const slugBase =
     slugFromHost(card.provider?.organization ? card.provider.organization : uri.hostname) || slugFromHost(uri.hostname);
 
+  const endpoint = resolveCardEndpoint(card);
+
   const ingested: IngestedCard = {
     well_known_uri: uri.toString(),
-    a2a_url: card.url,
+    a2a_url: endpoint.a2a_url,
     name: card.name ?? null,
     description: card.description ?? null,
     provider_org: card.provider?.organization ?? null,
     provider_url: card.provider?.url ?? null,
-    protocol_version: card.protocolVersion ?? null,
-    preferred_transport: card.preferredTransport ?? null,
+    protocol_version: endpoint.protocol_version,
+    preferred_transport: endpoint.preferred_transport,
     capabilities: card.capabilities ?? null,
     skills: card.skills as RegistrySkill[],
     icon_url: card.iconUrl ?? null,

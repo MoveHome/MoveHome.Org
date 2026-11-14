@@ -83,6 +83,36 @@ function normalisePropertyType(v) {
   return PROPERTY_TYPE_ENUM.has(lower) ? lower : "other";
 }
 
+// MoveHome's listing_status column is a closed lower-case enum (CHECK in
+// 0003_external_raia_listings.sql). v0.2 publishers send those values; v0.3
+// publishers send the upper-case portal-feed enum. Anything else is dropped to
+// NULL with a warning, because an unmapped value would fail the CHECK and take
+// the whole upsert down with it.
+const LISTING_STATUS_ENUM = new Set([
+  "available", "under_offer", "let_agreed", "sale_agreed",
+  "exchanged", "completed", "fallen_through", "withdrawn", "paused",
+]);
+const V03_STATUS_MAP = {
+  AVAILABLE:   "available",
+  UNDER_OFFER: "under_offer",
+  RESERVED:    "under_offer",
+  SOLD_STC:    "sale_agreed",
+  SOLD_STCM:   "sale_agreed",
+  LET_AGREED:  "let_agreed",
+  OFF_MARKET:  "paused",
+  WITHDRAWN:   "withdrawn",
+};
+
+function normaliseListingStatus(v, warnings = []) {
+  const s = asTrimmedStringOrNull(v);
+  if (!s) return null;
+  if (LISTING_STATUS_ENUM.has(s)) return s;
+  const mapped = V03_STATUS_MAP[s.toUpperCase()];
+  if (mapped) return mapped;
+  warnings.push(`Unmapped listing status: ${s}`);
+  return null;
+}
+
 function postcodeSector(full) {
   if (!full) return null;
   const m = String(full).toUpperCase().match(POSTCODE_FULL_RE);
@@ -146,8 +176,13 @@ function normaliseListing(listing, ctx) {
     warnings.push(`un_locode failed regex: ${un_locode}`);
   }
 
+  // v0.2 puts postcode_district at the top level; v0.3 (EA flat card) nests it
+  // under location, with location.district as the same masked value.
   const postcode_full     = asTrimmedStringOrNull(listing.postcode_full);
-  const postcode_district = postcodeDistrict(postcode_full, listing.postcode_district);
+  const postcode_district = postcodeDistrict(
+    postcode_full,
+    listing.postcode_district ?? listing?.location?.postcode_district ?? listing?.location?.district,
+  );
   const postcode_sector   = postcodeSector(postcode_full);
 
   // ── Pricing (whole-currency integers per v0.2) ──────────────────────────
@@ -155,16 +190,21 @@ function normaliseListing(listing, ctx) {
   if (currency && !ISO_CURRENCY_RE.test(currency)) {
     warnings.push(`Non-ISO currency: ${currency}`);
   }
-  const rent_pcm     = service_type === "long_term"  ? asIntOrNull(listing.rent_pcm)     : null;
+  // v0.3 names the monthly rent asking_rent_pcm (always per calendar month;
+  // rent_frequency is only the payment cadence, so no conversion applies).
+  const rent_pcm     = service_type === "long_term"
+    ? asIntOrNull(listing.rent_pcm ?? listing.asking_rent_pcm)
+    : null;
   const daily_rate   = service_type === "short_term" ? asIntOrNull(listing.daily_rate)   : null;
   const asking_price = service_type === "sale"       ? asIntOrNull(listing.asking_price) : null;
+  if (service_type === "long_term" && rent_pcm == null) warnings.push("long_term listing has no rent_pcm");
 
   // ── Media ───────────────────────────────────────────────────────────────
   const mediaBlock = asObjectOrNull(listing.media);
   const { url: photo_url, count: photo_count } = pickPhotoUrl(mediaBlock);
 
-  // ── Withdrawn check ─────────────────────────────────────────────────────
-  const status = asTrimmedStringOrNull(listing.listing_status);
+  // ── Status (v0.2 listing_status, or v0.3 upper-case status) ─────────────
+  const status = normaliseListingStatus(listing.listing_status ?? listing.status, warnings);
   let withdrawn_at = null;
   if (status === "completed" || status === "withdrawn") {
     withdrawn_at = listing.synced_at ?? new Date().toISOString();
@@ -254,6 +294,7 @@ function normaliseListing(listing, ctx) {
 module.exports = {
   normaliseListing,
   normalisePropertyType,
+  normaliseListingStatus,
   postcodeSector,
   postcodeDistrict,
   locationWkt,
