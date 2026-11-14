@@ -1,8 +1,19 @@
 // A2A protocol types are sourced from the official @a2a-js/sdk (A2A 0.3.x).
 // We re-export the subset the app uses so internal imports stay stable.
 
+import type { AgentCard as SdkAgentCard } from '@a2a-js/sdk';
+
+export interface AgentSupportedInterface {
+  protocolVersion: string;
+  protocolBinding: string;
+  securityRequirements?: Array<Record<string, string[]>>;
+}
+
+export interface AgentCard extends SdkAgentCard {
+  supportedInterfaces?: AgentSupportedInterface[];
+}
+
 export type {
-  AgentCard,
   AgentCardSignature,
   AgentSkill,
   AgentCapabilities,

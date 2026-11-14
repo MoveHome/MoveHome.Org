@@ -1,8 +1,19 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
+  async redirects() {
+    return [
+      {
+        source: '/.well-known/raia-agent.json',
+        destination: '/.well-known/raia.json',
+        permanent: true
+      }
+    ];
+  },
   async rewrites() {
     return [
+      // RAIA Agent Card discovery
+      { source: '/.well-known/raia.json', destination: '/api/raia-card' },
       // A2A Agent Card discovery at the spec well-known locations.
       { source: '/.well-known/agent.json', destination: '/api/agent-card' },
       { source: '/.well-known/agent-card.json', destination: '/api/agent-card' },

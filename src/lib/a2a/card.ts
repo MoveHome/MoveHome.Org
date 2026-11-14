@@ -2,7 +2,7 @@
 // (and the legacy /.well-known/agent.json). External agents fetch this to discover
 // the JSON-RPC endpoint and the skills they can invoke. Typed against @a2a-js/sdk.
 
-import { A2A_PROTOCOL_VERSION, type AgentCard } from './types';
+import { A2A_PROTOCOL_VERSION, type AgentCard, type AgentSupportedInterface } from './types';
 import { agentWritesEnabled } from '@/lib/agent-write-policy';
 
 const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || 'https://movehome.org').replace(/\/$/, '');
@@ -26,6 +26,16 @@ export function buildAgentCard(): AgentCard {
         : '. Agent enquiries are in a closed pilot and not currently offered.'),
     url: `${SITE_URL}/api/a2a`,
     preferredTransport: 'JSONRPC',
+    supportedInterfaces: [
+      {
+        protocolVersion: '1.0',
+        protocolBinding: 'JSONRPC'
+      },
+      {
+        protocolVersion: '0.3',
+        protocolBinding: 'JSONRPC'
+      }
+    ] as AgentSupportedInterface[],
     version: AGENT_VERSION,
     provider: {
       organization: 'Move Home Organisation CIC',
