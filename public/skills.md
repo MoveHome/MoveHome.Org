@@ -10,7 +10,7 @@
 - **Agent Card:** `https://movehome.org/.well-known/agent-card.json`  (machine-readable capabilities)
 - **Protocol:** A2A `0.3.0`, transport `JSONRPC`. CORS is open (`*`). Auth: **none** (anonymous).
 - **This doc:** `https://movehome.org/skills.md`
-- **MCP server (Claude, ChatGPT, any MCP client):** `https://movehome.org/mcp` (Streamable HTTP, no auth)
+- **MCP server (Claude, ChatGPT, any MCP client):** `https://movehome.org/mcp` (Streamable HTTP, read-only by default, `create_enquiry` write tool available for authenticated pilot clients with OAuth 2.1 client_credentials)
 - **Claude connector manifest:** `https://movehome.org/.well-known/claude-connector.json`
 
 ---
