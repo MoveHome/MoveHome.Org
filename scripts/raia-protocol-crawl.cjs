@@ -122,9 +122,13 @@ function validateAgentCard(card) {
     errors.push("agent card is not an object");
     return errors;
   }
-  // Flat A2A cards carry protocolVersion + url, not RAIA agent_id/schema_version/endpoints;
-  // identity comes from the registry row.
+  // Flat A2A cards carry protocolVersion + url (0.3) or supportedInterfaces (1.0),
+  // not RAIA agent_id/schema_version/endpoints; identity comes from the registry row.
   if (isJsonRpcCard(card)) return errors;
+  if (isV1OnlyCard(card)) {
+    errors.push("A2A 1.0 card declares no JSONRPC 0.3 interface (crawler speaks message/send)");
+    return errors;
+  }
   for (const f of (AGENT_CARD_SCHEMA.required ?? [])) {
     if (!(f in card)) errors.push(`missing required field: ${f}`);
   }
@@ -251,9 +255,38 @@ async function fetchJson(url, { timeoutMs, label, method = "GET", headers = {}, 
 const PAGE_LIMIT = 50;  // A2A search skill caps limit at 50
 const ITEM_KEYS  = ["properties", "results", "listings"];
 
+const HTTP_URL_RE = /^https?:\/\//;
+
+/**
+ * The JSON-RPC endpoint this crawler can talk to, or null. The crawler speaks
+ * A2A 0.3 (`message/send`, no A2A-Version header ⇒ 0.3 per spec §3), so:
+ *   - A2A 0.3 card: top-level `preferredTransport: "JSONRPC"` + `url`.
+ *   - A2A 1.0 card: no top-level url; use the JSONRPC entry in
+ *     `supportedInterfaces` that declares protocolVersion 0.3. A 1.0-only card
+ *     has no endpoint we can call yet → null (ADR-472 V2: a 0.3 method against
+ *     a 1.0-only interface is -32601, so guessing would just fail later).
+ */
+function jsonRpcEndpoint(card) {
+  if (card?.preferredTransport === "JSONRPC" &&
+      typeof card.url === "string" && HTTP_URL_RE.test(card.url)) {
+    return card.url;
+  }
+  const ifaces = Array.isArray(card?.supportedInterfaces) ? card.supportedInterfaces : [];
+  const legacy = ifaces.find(i =>
+    String(i?.protocolBinding ?? "").toUpperCase() === "JSONRPC" &&
+    /^0\.3(?:\.|$)/.test(String(i?.protocolVersion ?? "")) &&
+    typeof i.url === "string" && HTTP_URL_RE.test(i.url));
+  return legacy ? legacy.url : null;
+}
+
 function isJsonRpcCard(card) {
-  return card?.preferredTransport === "JSONRPC" &&
-    typeof card.url === "string" && /^https?:\/\//.test(card.url);
+  return jsonRpcEndpoint(card) !== null;
+}
+
+/** An A2A 1.0 card that declares interfaces but none we can speak. */
+function isV1OnlyCard(card) {
+  return Array.isArray(card?.supportedInterfaces) && card.supportedInterfaces.length > 0 &&
+    !isJsonRpcCard(card);
 }
 
 /**
@@ -270,7 +303,7 @@ function buildSearchRequest(card, params = {}, credentials = null) {
   if (isJsonRpcCard(card)) {
     const { offset: _offset, ...skillParams } = params;
     return {
-      url:    card.url,
+      url:    jsonRpcEndpoint(card),
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
       body: {
@@ -678,7 +711,7 @@ async function main() {
   return 0;
 }
 
-module.exports = { buildSearchRequest, extractItems, collectSearchPages, isJsonRpcCard, upsertListing, setClient, crawlAgent, setFetch };
+module.exports = { buildSearchRequest, extractItems, collectSearchPages, isJsonRpcCard, jsonRpcEndpoint, validateAgentCard, upsertListing, setClient, crawlAgent, setFetch };
 
 if (require.main === module) {
   if (!SUPABASE_URL || !SUPABASE_KEY) {
