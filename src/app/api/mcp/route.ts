@@ -6,7 +6,7 @@
 import { resolveSkill } from '@/lib/a2a/skills';
 import { handleMcp, mcpOptions, mcpGetInfo, type McpTool, type McpServerInfo } from '@/lib/mcp/http';
 import { agentWritesEnabled, checkTestFence, buildAttribution, enquiryIdForIdempotencyKey } from '@/lib/agent-write-policy';
-import { verifyMcpToken } from '@/lib/mcp/oauth';
+import { hasWriteScope, verifyMcpToken } from '@/lib/mcp/oauth';
 import { checkMcpWriteRate, recordMcpWrite } from '@/lib/mcp/write-throttle';
 import { createSupabaseAdminClient } from '@/lib/supabase-admin';
 
@@ -137,6 +137,24 @@ export async function POST(req: Request) {
             headers: {
               'Content-Type': 'application/json',
               'WWW-Authenticate': 'Bearer resource_metadata="https://movehome.org/.well-known/oauth-protected-resource"'
+            }
+          }
+        );
+      }
+
+      // G-AUTH-03: a valid token without enquiry:write is refused (403), never written.
+      if (!hasWriteScope(verifiedToken)) {
+        return new Response(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: reqJson.id ?? null,
+            error: { code: -32001, message: 'insufficient_scope: enquiry:write required.' }
+          }),
+          {
+            status: 403,
+            headers: {
+              'Content-Type': 'application/json',
+              'WWW-Authenticate': 'Bearer error="insufficient_scope", scope="enquiry:write"'
             }
           }
         );
