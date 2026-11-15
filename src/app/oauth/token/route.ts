@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getClientRegistration, issueMcpToken } from '@/lib/mcp/oauth';
+import { clientSecretMatches, getClientRegistration, issueMcpToken, TokenIssueError } from '@/lib/mcp/oauth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -8,7 +8,7 @@ export async function POST(req: Request) {
   let grantType: string | null = null;
   let clientId: string | null = null;
   let clientSecret: string | null = null;
-  let scope = 'enquiry:write';
+  let scope: string | null = null;
 
   const contentType = req.headers.get('content-type') || '';
   if (contentType.includes('application/x-www-form-urlencoded')) {
@@ -61,7 +61,7 @@ export async function POST(req: Request) {
   }
 
   const reg = getClientRegistration(clientId);
-  if (!reg || (reg.secret && reg.secret !== clientSecret)) {
+  if (!reg || !clientSecretMatches(reg, clientSecret)) {
     return NextResponse.json(
       { error: 'invalid_client', error_description: 'Invalid client credentials.' },
       { status: 401 }
@@ -75,7 +75,7 @@ export async function POST(req: Request) {
         access_token: tokenInfo.access_token,
         token_type: 'Bearer',
         expires_in: tokenInfo.expires_in,
-        scope
+        scope: tokenInfo.scope
       },
       {
         status: 200,
@@ -86,6 +86,17 @@ export async function POST(req: Request) {
       }
     );
   } catch (e) {
+    if (e instanceof TokenIssueError && e.code === 'invalid_scope') {
+      return NextResponse.json({ error: 'invalid_scope', error_description: e.message }, { status: 400 });
+    }
+    if (e instanceof TokenIssueError && e.code === 'server_error') {
+      // Fail closed: no signing key configured → no tokens at all.
+      console.error('[/oauth/token] signing key not configured');
+      return NextResponse.json(
+        { error: 'temporarily_unavailable', error_description: 'Token issuance is not configured.' },
+        { status: 503 }
+      );
+    }
     console.error('[/oauth/token] Error issuing token:', e);
     return NextResponse.json(
       { error: 'server_error', error_description: 'Failed to issue token.' },
