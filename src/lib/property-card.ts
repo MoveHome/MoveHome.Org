@@ -61,6 +61,25 @@ export function statusLabel(l: Listing, now: Date = new Date()): string {
   return l.listing_status.replace(/_/g, ' ');
 }
 
+export function countryOf(l: Listing): 'GB' | 'TH' | null {
+  const locode = (l.un_locode ?? '').toUpperCase();
+  if (l.jurisdiction === 'TH' || locode.startsWith('TH') || l.currency === 'THB') return 'TH';
+  if (l.jurisdiction === 'GB' || locode.startsWith('GB') || l.currency === 'GBP') return 'GB';
+  return null;
+}
+
+export function resolveDefaultCountry(ipCountry: string | null | undefined): 'GB' | 'TH' {
+  return ipCountry?.toUpperCase() === 'TH' ? 'TH' : 'GB';
+}
+
+export function priceThb(l: Listing): number | null {
+  const p =
+    l.service_type === 'sale' ? l.asking_price : (l.rent_pcm ?? (l.daily_rate ? l.daily_rate * 30 : null));
+  if (p != null && l.currency === 'THB') return p;
+  const gbp = priceGbp(l);
+  return gbp != null ? Math.round(gbp * 45) : null;
+}
+
 export type ClusterId = 'all' | 'bkk' | 'lon' | 'other';
 
 export const CLUSTER_PILLS: { id: ClusterId; label: string }[] = [
@@ -161,19 +180,27 @@ export function buildPropertyDescriptionWithCta(
   l: Listing,
   vendorOrgName?: string | null
 ): string {
+  const priceSentence = `And all this is only ${priceLabel(l)}.`;
+  const vendor = vendorOrgName?.trim() || 'the listing agent';
+  const ctaSentence = `Just send a message to ${vendor} to arrange a viewing!`;
+  const suffix = ` ${priceSentence} ${ctaSentence}`;
+
   const desc = plainText(sanitizeDescription(l.marketing_description));
-  const summary =
-    desc.length > DESCRIPTION_MAX
-      ? `${desc.slice(0, DESCRIPTION_MAX).replace(/\s+\S*$/, '')}…`
-      : desc;
   const where = [l.suburb, l.postcode_district].filter(Boolean).join(', ');
   const fallback = `${titleOf(l)}${where ? ` in ${where}` : ''}, ${statusLabel(l).toLowerCase()}.`;
-  // Never speak "only Price on application".
-  const priced = l.rent_pcm ?? l.asking_price ?? l.daily_rate;
-  const price = priced ? `And all this is only ${priceLabel(l)}. ` : '';
-  const vendor = vendorOrgName?.trim() || 'the listing agent';
-  const body = summary || fallback;
-  return `${/[.!?…]$/.test(body) ? body : `${body}.`} ${price}Just send a message to ${vendor} to arrange a viewing!`;
+  const rawBody = desc || fallback;
+  const bodyText = /[.!?…]$/.test(rawBody) ? rawBody : `${rawBody}.`;
+
+  const maxBodyLen = Math.max(0, DESCRIPTION_MAX - suffix.length);
+  let body = bodyText;
+  if (body.length > maxBodyLen) {
+    body = `${body.slice(0, maxBodyLen).replace(/\s+\S*$/, '')}…`;
+    if (!/[.!?…]$/.test(body)) {
+      body = `${body}…`;
+    }
+  }
+
+  return `${body}${suffix}`;
 }
 
 // A card with no video and no image renders a dead "No media" stage, so rich

@@ -3,10 +3,13 @@ import type { Listing } from '../lib/types';
 import {
   buildPropertyDescriptionWithCta,
   cityOf,
+  countryOf,
   isVacant,
   isYouTubeUrl,
   locationsOf,
   priceGbp,
+  priceThb,
+  resolveDefaultCountry,
   specGroups,
   statusLabel,
   titleOf,
@@ -17,6 +20,25 @@ const listing = (over: Partial<Listing> = {}): Listing =>
   ({ photos: [], service_type: 'long_term', ...over }) as Listing;
 
 describe('property-card helpers', () => {
+  it('detects countryOf from jurisdiction, un_locode, and currency', () => {
+    expect(countryOf(listing({ jurisdiction: 'GB' }))).toBe('GB');
+    expect(countryOf(listing({ un_locode: 'THBKK' }))).toBe('TH');
+    expect(countryOf(listing({ currency: 'THB' }))).toBe('TH');
+    expect(countryOf(listing({ currency: 'USD' }))).toBeNull();
+  });
+
+  it('resolves default country from IP header', () => {
+    expect(resolveDefaultCountry('TH')).toBe('TH');
+    expect(resolveDefaultCountry('th')).toBe('TH');
+    expect(resolveDefaultCountry('GB')).toBe('GB');
+    expect(resolveDefaultCountry(null)).toBe('GB');
+    expect(resolveDefaultCountry('US')).toBe('GB');
+  });
+
+  it('calculates priceThb accurately in native THB or GBP fallback', () => {
+    expect(priceThb(listing({ rent_pcm: 30000, currency: 'THB' }))).toBe(30000);
+    expect(priceThb(listing({ rent_pcm: 1000, currency: 'GBP' }))).toBe(45000);
+  });
   it('splits the run-together "2-bedflat" headline typo', () => {
     expect(titleOf(listing({ headline: 'Modern 2-bedflat in Camden' }))).toBe(
       'Modern 2-bed flat in Camden'
@@ -104,24 +126,23 @@ describe('buildPropertyDescriptionWithCta', () => {
     expect(text).not.toContain('1 bathroom');
   });
 
-  it('truncates long descriptions on a word boundary', () => {
+  it('truncates long descriptions on a word boundary including price and CTA within cap', () => {
     const text = buildPropertyDescriptionWithCta(
       listing({ ...base, marketing_description: 'spacious '.repeat(100).trim() }),
       'Acme'
     );
-    const summary = text.split(' And all this is only')[0];
-    expect(summary.endsWith('…')).toBe(true);
-    expect(summary.length).toBeLessThanOrEqual(482);
-    expect(summary).toMatch(/spacious…$/);
+    expect(text.length).toBeLessThanOrEqual(480);
+    expect(text).toContain('And all this is only £500 pcm.');
+    expect(text).toContain('Just send a message to Acme to arrange a viewing!');
   });
 
-  it('skips the price sentence when the listing has no price', () => {
+  it('includes the price sentence using priceLabel even when listing has no numeric price', () => {
     const text = buildPropertyDescriptionWithCta(
       listing({ raia_id: 'prop-gb-lon-studio-0001', marketing_description: 'A lovely studio.', currency: 'GBP' }),
       'Acme'
     );
-    expect(text).not.toContain('Price on application');
-    expect(text).toBe('A lovely studio. Just send a message to Acme to arrange a viewing!');
+    expect(text).toContain('And all this is only Price on application.');
+    expect(text).toBe('A lovely studio. And all this is only Price on application. Just send a message to Acme to arrange a viewing!');
   });
 });
 

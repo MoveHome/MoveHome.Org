@@ -1,18 +1,18 @@
 'use client';
 
-// Swipe deck shell: one hamburger, a plain-English location type-ahead, and a
-// filter-preferences sheet on the right. Owns the stream index, filters and
-// localStorage saves.
+// Swipe deck shell: one hamburger, a clean top bar, and a filter-preferences
+// sheet on the right. Owns the stream index, filters and localStorage saves.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Listing } from '@/lib/types';
 import PropertyCard from './PropertyCard';
-import { clusterOf, locationsOf, priceGbp } from '@/lib/property-card';
+import { countryOf, locationsOf, priceGbp, priceThb, clusterOf } from '@/lib/property-card';
 
 const SAVED_KEY = 'movehome.saved.v1';
 
 type Tab = 'explore' | 'saved' | 'viewings';
 type Service = 'all' | 'long_term' | 'short_term' | 'sale';
+type Country = 'GB' | 'TH' | 'ALL';
 
 const SERVICE_FILTERS: [Service, string][] = [
   ['all', 'All'],
@@ -21,11 +21,18 @@ const SERVICE_FILTERS: [Service, string][] = [
   ['sale', 'Sales (Buy)']
 ];
 
-const BUDGETS: [number, string][] = [
+const BUDGETS_GBP: [number, string][] = [
   [0, 'Any'],
   [1500, '≤ £1,500'],
   [2500, '≤ £2,500'],
   [4000, '≤ £4,000']
+];
+
+const BUDGETS_THB: [number, string][] = [
+  [0, 'Any'],
+  [20000, '≤ ฿20,000'],
+  [40000, '≤ ฿40,000'],
+  [80000, '≤ ฿80,000']
 ];
 
 const BEDROOMS: [number, string][] = [
@@ -62,18 +69,21 @@ const haystack = (l: Listing) =>
 
 export default function PropertyDeck({
   listings,
-  initialRaiaId
+  initialRaiaId,
+  defaultCountry = 'GB'
 }: {
   listings: Listing[];
   initialRaiaId?: string;
+  defaultCountry?: Country;
 }) {
+  const [country, setCountry] = useState<Country>(defaultCountry);
   const [locations, setLocations] = useState<string[]>([]);
   const [service, setService] = useState<Service>('all');
   const [budget, setBudget] = useState(0);
   const [beds, setBeds] = useState(-1);
   const [prompt, setPrompt] = useState('');
-  const [query, setQuery] = useState('');
-  const [picking, setPicking] = useState(false);
+  const [modalLocQuery, setModalLocQuery] = useState('');
+  const [modalLocPicking, setModalLocPicking] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [drawer, setDrawer] = useState(false);
@@ -82,7 +92,7 @@ export default function PropertyDeck({
   const [index, setIndex] = useState(() =>
     Math.max(0, listings.findIndex((l) => l.raia_id === initialRaiaId))
   );
-  const searchRef = useRef<HTMLInputElement>(null);
+  const modalLocSearchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => setSaved(readSaved()), []);
 
@@ -99,21 +109,43 @@ export default function PropertyDeck({
     });
   }
 
-  // Every label a user can type, in plain English, never a locode.
+  // Scoped location options based on active country filter
   const locationOptions = useMemo(() => {
     const seen = new Map<string, string>();
-    for (const l of listings) for (const loc of locationsOf(l)) seen.set(loc.toLowerCase(), loc);
+    for (const l of listings) {
+      if (country !== 'ALL') {
+        const c = countryOf(l);
+        if (c && c !== country) continue;
+      }
+      for (const loc of locationsOf(l)) {
+        seen.set(loc.toLowerCase(), loc);
+      }
+    }
     return [...seen.values()].sort((a, b) => a.localeCompare(b));
-  }, [listings]);
+  }, [listings, country]);
 
   const suggestions = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = modalLocQuery.trim().toLowerCase();
     return locationOptions
       .filter((o) => !locations.includes(o) && (!q || o.toLowerCase().includes(q)))
       .slice(0, 8);
-  }, [locationOptions, locations, query]);
+  }, [locationOptions, locations, modalLocQuery]);
+
+  const handleCountryChange = (newCountry: Country) => {
+    setCountry(newCountry);
+    setBudget(0);
+    if (newCountry !== 'ALL') {
+      const validLocs = new Set(
+        listings
+          .filter((l) => countryOf(l) === newCountry)
+          .flatMap((l) => locationsOf(l).map((loc) => loc.toLowerCase()))
+      );
+      setLocations((prev) => prev.filter((loc) => validLocs.has(loc.toLowerCase())));
+    }
+  };
 
   const activeCount =
+    (country !== defaultCountry ? 1 : 0) +
     (locations.length > 0 ? 1 : 0) +
     (service !== 'all' ? 1 : 0) +
     (budget > 0 ? 1 : 0) +
@@ -125,6 +157,12 @@ export default function PropertyDeck({
     return listings.filter((l) => {
       if (tab === 'saved') return saved.includes(l.raia_id);
       if (tab === 'viewings') return false;
+
+      if (country !== 'ALL') {
+        const c = countryOf(l);
+        if (c && c !== country) return false;
+      }
+
       if (
         locations.length &&
         !locationsOf(l).some((loc) => locations.some((s) => s.toLowerCase() === loc.toLowerCase()))
@@ -133,7 +171,7 @@ export default function PropertyDeck({
       }
       if (service !== 'all' && l.service_type !== service) return false;
       if (budget > 0 && l.service_type !== 'sale') {
-        const price = priceGbp(l);
+        const price = country === 'TH' ? priceThb(l) : priceGbp(l);
         // Unknown price stays visible — hiding it silently loses listings.
         if (price != null && price > budget) return false;
       }
@@ -145,7 +183,7 @@ export default function PropertyDeck({
       }
       return true;
     });
-  }, [listings, locations, service, budget, beds, prompt, tab, saved]);
+  }, [listings, country, locations, service, budget, beds, prompt, tab, saved]);
 
   const safeIndex = Math.min(index, Math.max(0, stream.length - 1));
   const current = stream[safeIndex];
@@ -154,7 +192,7 @@ export default function PropertyDeck({
   useEffect(() => {
     setIndex(0);
     setDrawer(false);
-  }, [locations, service, budget, beds, prompt, tab]);
+  }, [country, locations, service, budget, beds, prompt, tab]);
 
   // Silently warm the next card's first frame (image or video poster) and prefetch audio TTS.
   useEffect(() => {
@@ -209,11 +247,13 @@ export default function PropertyDeck({
         ? ['No viewings booked yet', 'Book one from any card.']
         : ['No properties match', 'Try removing a location or filter.'];
 
+  const budgets = country === 'TH' ? BUDGETS_THB : BUDGETS_GBP;
+
   return (
     <div className="flex h-[100dvh] w-full flex-col bg-[#09090b] text-zinc-100">
-      {/* Top bar: hamburger · location type-ahead · filter settings */}
+      {/* Top bar: hamburger button (left) · filter settings button (right) */}
       <header className="relative z-30 shrink-0 border-b border-zinc-800/60 bg-[#0a0a0c] px-3 pb-2 pt-3">
-        <div className="mx-auto flex w-full max-w-[420px] items-center gap-2">
+        <div className="mx-auto flex w-full max-w-[420px] items-center justify-between gap-2">
           <button
             type="button"
             onClick={() => setMenuOpen((v) => !v)}
@@ -223,67 +263,6 @@ export default function PropertyDeck({
           >
             <MenuIcon />
           </button>
-
-          <div className="relative min-w-0 flex-1">
-            <div className="flex flex-wrap items-center gap-1 rounded-2xl border border-zinc-800 bg-zinc-900/70 px-1.5 py-1 focus-within:border-emerald-500">
-              {locations.map((loc) => (
-                <span
-                  key={loc}
-                  className="inline-flex items-center gap-1 rounded-full bg-emerald-500 px-2 py-0.5 text-[11px] font-bold text-emerald-950"
-                >
-                  {loc}
-                  <button
-                    type="button"
-                    onClick={() => setLocations((prev) => prev.filter((x) => x !== loc))}
-                    aria-label={`Remove ${loc}`}
-                    className="text-emerald-950/80 hover:text-emerald-950"
-                  >
-                    ×
-                  </button>
-                </span>
-              ))}
-              <input
-                ref={searchRef}
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                onFocus={() => setPicking(true)}
-                onBlur={() => setTimeout(() => setPicking(false), 120)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && suggestions[0]) {
-                    setLocations((prev) => [...prev, suggestions[0]]);
-                    setQuery('');
-                    e.preventDefault();
-                  } else if (e.key === 'Backspace' && !query && locations.length) {
-                    setLocations((prev) => prev.slice(0, -1));
-                  }
-                }}
-                placeholder="Add locations… e.g. Fulham, Holborn, Bangkok"
-                aria-label="Search locations"
-                className="min-w-[7rem] flex-1 bg-transparent px-1 py-0.5 text-xs text-zinc-100 outline-none placeholder:text-zinc-500"
-              />
-            </div>
-
-            {picking && suggestions.length > 0 && (
-              <ul className="absolute inset-x-0 top-full z-40 mt-1 max-h-56 overflow-y-auto rounded-xl border border-zinc-800 bg-[#0a0a0c] py-1 shadow-2xl [scrollbar-width:none]">
-                {suggestions.map((opt) => (
-                  <li key={opt}>
-                    <button
-                      type="button"
-                      onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => {
-                        setLocations((prev) => [...prev, opt]);
-                        setQuery('');
-                        searchRef.current?.focus();
-                      }}
-                      className="block w-full px-3 py-1.5 text-left text-xs font-semibold text-zinc-300 hover:bg-emerald-500/15 hover:text-emerald-300"
-                    >
-                      {opt}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
 
           <button
             type="button"
@@ -455,30 +434,79 @@ export default function PropertyDeck({
             </div>
 
             <div className="mx-auto w-full max-w-[420px] space-y-4">
+              <Section title="Country">
+                <select
+                  value={country}
+                  onChange={(e) => handleCountryChange(e.target.value as Country)}
+                  aria-label="Country"
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-semibold text-zinc-100 outline-none focus:border-emerald-500"
+                >
+                  <option value="GB">United Kingdom</option>
+                  <option value="TH">Thailand</option>
+                  <option value="ALL">All Countries</option>
+                </select>
+              </Section>
+
               <Section title="Locations">
-                <div className="flex flex-wrap gap-1.5">
-                  {locationOptions.map((loc) => {
-                    const on = locations.includes(loc);
-                    return (
-                      <button
+                <div className="relative min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5 rounded-2xl border border-zinc-800 bg-zinc-900/70 p-2 focus-within:border-emerald-500">
+                    {locations.map((loc) => (
+                      <span
                         key={loc}
-                        type="button"
-                        aria-pressed={on}
-                        onClick={() =>
-                          setLocations((prev) =>
-                            on ? prev.filter((x) => x !== loc) : [...prev, loc]
-                          )
-                        }
-                        className={`rounded-full border px-3 py-1.5 text-[11px] font-semibold ${
-                          on
-                            ? 'border-emerald-500 bg-emerald-500 text-emerald-950'
-                            : 'border-zinc-800 bg-zinc-900 text-zinc-400'
-                        }`}
+                        className="inline-flex items-center gap-1 rounded-full bg-emerald-500 px-2.5 py-1 text-[11px] font-bold text-emerald-950"
                       >
                         {loc}
-                      </button>
-                    );
-                  })}
+                        <button
+                          type="button"
+                          onClick={() => setLocations((prev) => prev.filter((x) => x !== loc))}
+                          aria-label={`Remove ${loc}`}
+                          className="text-emerald-950/80 hover:text-emerald-950"
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                    <input
+                      ref={modalLocSearchRef}
+                      value={modalLocQuery}
+                      onChange={(e) => setModalLocQuery(e.target.value)}
+                      onFocus={() => setModalLocPicking(true)}
+                      onBlur={() => setTimeout(() => setModalLocPicking(false), 120)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && suggestions[0]) {
+                          setLocations((prev) => [...prev, suggestions[0]]);
+                          setModalLocQuery('');
+                          e.preventDefault();
+                        } else if (e.key === 'Backspace' && !modalLocQuery && locations.length) {
+                          setLocations((prev) => prev.slice(0, -1));
+                        }
+                      }}
+                      placeholder={locations.length ? 'Add another location…' : 'Search locations… e.g. Fulham, Thonglor'}
+                      aria-label="Search locations"
+                      className="min-w-[7rem] flex-1 bg-transparent px-1 py-0.5 text-xs text-zinc-100 outline-none placeholder:text-zinc-500"
+                    />
+                  </div>
+
+                  {modalLocPicking && suggestions.length > 0 && (
+                    <ul className="absolute inset-x-0 top-full z-40 mt-1 max-h-56 overflow-y-auto rounded-xl border border-zinc-800 bg-[#0a0a0c] py-1 shadow-2xl [scrollbar-width:none]">
+                      {suggestions.map((opt) => (
+                        <li key={opt}>
+                          <button
+                            type="button"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => {
+                              setLocations((prev) => [...prev, opt]);
+                              setModalLocQuery('');
+                              modalLocSearchRef.current?.focus();
+                            }}
+                            className="block w-full px-3 py-1.5 text-left text-xs font-semibold text-zinc-300 hover:bg-emerald-500/15 hover:text-emerald-300"
+                          >
+                            {opt}
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               </Section>
 
@@ -487,7 +515,7 @@ export default function PropertyDeck({
               </Section>
 
               <Section title="Max budget per month">
-                <PillRow options={BUDGETS} value={budget} onChange={(v) => setBudget(Number(v))} />
+                <PillRow options={budgets} value={budget} onChange={(v) => setBudget(Number(v))} />
               </Section>
 
               <Section title="Min bedrooms">
@@ -509,6 +537,7 @@ export default function PropertyDeck({
               <button
                 type="button"
                 onClick={() => {
+                  setCountry(defaultCountry);
                   setLocations([]);
                   setService('all');
                   setBudget(0);
