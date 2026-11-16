@@ -17,6 +17,7 @@ import {
 } from '@/lib/property-card';
 
 const SAVED_KEY = 'movehome.saved.v1';
+const VOICE_KEY = 'movehome.voice.v1';
 
 type Tab = 'explore' | 'saved' | 'viewings';
 type Service = 'all' | 'long_term' | 'short_term' | 'sale';
@@ -100,6 +101,7 @@ export default function PropertyDeck({
   const [budget, setBudget] = useState(0);
   const [beds, setBeds] = useState(-1);
   const [prompt, setPrompt] = useState('');
+  const [voiceGender, setVoiceGender] = useState<'female' | 'male'>('female');
   const [modalLocQuery, setModalLocQuery] = useState('');
   const [modalLocPicking, setModalLocPicking] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
@@ -112,7 +114,19 @@ export default function PropertyDeck({
   );
   const modalLocSearchRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => setSaved(readSaved()), []);
+  useEffect(() => {
+    setSaved(readSaved());
+    if (localStorage.getItem(VOICE_KEY) === 'male') setVoiceGender('male');
+  }, []);
+
+  function pickVoice(g: 'female' | 'male') {
+    setVoiceGender(g);
+    try {
+      localStorage.setItem(VOICE_KEY, g);
+    } catch {
+      /* private mode — keep in-memory only */
+    }
+  }
 
   // Saved badge in the nav must follow heart taps anywhere in the card.
   function toggleSave(id: string) {
@@ -226,11 +240,13 @@ export default function PropertyDeck({
     }
     // N+1 audio prefetch with cancellation signal to prevent runaway/overlapping fetches
     const controller = new AbortController();
-    fetch(`/api/tts?raia_id=${encodeURIComponent(nextListing.raia_id)}`, {
-      signal: controller.signal
-    }).catch(() => {});
+    const lang = countryOf(nextListing) === 'TH' ? 'th-TH' : 'en-GB';
+    fetch(
+      `/api/tts?raia_id=${encodeURIComponent(nextListing.raia_id)}&lang=${lang}&gender=${voiceGender}`,
+      { signal: controller.signal }
+    ).catch(() => {});
     return () => controller.abort();
-  }, [stream, safeIndex]);
+  }, [stream, safeIndex, voiceGender]);
 
   const go = (delta: number) => {
     setDrawer(false);
@@ -333,6 +349,7 @@ export default function PropertyDeck({
               drawer={drawer}
               onDrawerChange={setDrawer}
               keysEnabled={!filterOpen && !menuOpen}
+              voiceGender={voiceGender}
               onSelect={(id) => {
                 const i = stream.findIndex((l) => l.raia_id === id);
                 if (i >= 0) go(i - safeIndex);
@@ -534,6 +551,17 @@ export default function PropertyDeck({
                 <PillRow options={BEDROOMS} value={beds} onChange={(v) => setBeds(Number(v))} />
               </Section>
 
+              <Section title="Narration voice">
+                <PillRow
+                  options={[
+                    ['female', 'Female'],
+                    ['male', 'Male']
+                  ]}
+                  value={voiceGender}
+                  onChange={(v) => pickVoice(v as 'female' | 'male')}
+                />
+              </Section>
+
               <Section title="Refine with AI">
                 <input
                   value={prompt}
@@ -555,6 +583,7 @@ export default function PropertyDeck({
                   setBudget(0);
                   setBeds(-1);
                   setPrompt('');
+                  pickVoice('female');
                 }}
                 className="w-full rounded-full border border-zinc-800 py-2 text-[11px] font-semibold text-zinc-400 hover:text-zinc-200"
               >
