@@ -19,7 +19,8 @@ export function titleOf(l: Listing): string {
     l.headline ??
     l.development_name ??
     [l.suburb, l.postcode_district].filter(Boolean).join(' ');
-  return t || l.raia_id;
+  // Upstream headlines ship "2-bedflat"; split the run-together word.
+  return (t || l.raia_id).replace(/(\d+-bed)flat/gi, '$1 flat');
 }
 
 // Two spec groups, nulls dropped so nothing ever renders "UNKNOWN"/"NA".
@@ -32,16 +33,22 @@ export function specGroups(l: Listing): string[] {
     l.floor_area_sqm != null ? `${l.floor_area_sqm} m²` : null,
     l.floor != null ? `Fl ${l.floor}` : null
   ].filter(Boolean);
-  return [rooms.join(' · '), size.join(' · ')].filter(Boolean).map((s) => `${s} ✓`);
+  return [rooms.join(' · '), size.join(' · ')].filter(Boolean);
+}
+
+// Vacant = live and not future-dated. Drives the HUD dot colour and copy.
+export function isVacant(l: Listing, now: Date = new Date()): boolean {
+  if (l.listing_status && l.listing_status !== 'available') return false;
+  return !l.available_from || new Date(l.available_from) <= now;
 }
 
 export function statusLabel(l: Listing, now: Date = new Date()): string {
   if (l.listing_status === 'available' || !l.listing_status) {
-    if (l.available_from && new Date(l.available_from) > now) {
-      const d = new Date(l.available_from);
+    if (!isVacant(l, now)) {
+      const d = new Date(l.available_from as string);
       return `Available ${d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`;
     }
-    return '🟢 Vacant · Available Now';
+    return 'Vacant · Available Now';
   }
   return l.listing_status.replace(/_/g, ' ');
 }
