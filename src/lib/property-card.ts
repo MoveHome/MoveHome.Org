@@ -63,9 +63,15 @@ export function statusLabel(l: Listing, now: Date = new Date()): string {
 
 export function countryOf(l: Listing): CatalogCountry | null {
   const locode = (l.un_locode ?? '').toUpperCase();
-  if (l.jurisdiction === 'TH' || locode.startsWith('TH') || l.currency === 'THB') return 'TH';
-  if (l.jurisdiction === 'MY' || locode.startsWith('MY') || l.currency === 'MYR') return 'MY';
-  if (l.jurisdiction === 'GB' || locode.startsWith('GB') || l.currency === 'GBP') return 'GB';
+  // UN/LOCODE prefix wins: a GBLON listing priced in MYR is still a UK property.
+  if (locode.startsWith('GB')) return 'GB';
+  if (locode.startsWith('TH')) return 'TH';
+  if (locode.startsWith('MY')) return 'MY';
+  const jurisdiction = (l.jurisdiction ?? '').toUpperCase();
+  if (jurisdiction === 'GB' || jurisdiction === 'TH' || jurisdiction === 'MY') return jurisdiction;
+  if (l.currency === 'GBP') return 'GB';
+  if (l.currency === 'THB') return 'TH';
+  if (l.currency === 'MYR') return 'MY';
   return null;
 }
 
@@ -124,10 +130,12 @@ export const UN_LOCODE_CATALOG: Record<CatalogCountry, readonly { code: string; 
     { code: 'GBABD', city: 'Aberdeen' },
     { code: 'GBBAT', city: 'Bath' },
     { code: 'GBBEL', city: 'Belfast' },
+    // Live listings carry GBBHX for Birmingham (upstream feed), so it stays here
+    // even though UNECE also lists GBBHM for the city.
     { code: 'GBBHX', city: 'Birmingham' },
     { code: 'GBBMT', city: 'Bournemouth' },
-    { code: 'GBBRD', city: 'Bradford' },
-    { code: 'GBBHM', city: 'Brighton' },
+    { code: 'GBBRF', city: 'Bradford' },
+    { code: 'GBBSH', city: 'Brighton' },
     { code: 'GBBRS', city: 'Bristol' },
     { code: 'GBCBG', city: 'Cambridge' },
     { code: 'GBCDF', city: 'Cardiff' },
@@ -195,7 +203,7 @@ export const UN_LOCODE_CATALOG: Record<CatalogCountry, readonly { code: string; 
   MY: [
     { code: 'MYAOR', city: 'Alor Setar' },
     { code: 'MYBTU', city: 'Bintulu' },
-    { code: 'MYCYJ', city: 'Cyberjaya' },
+    { code: 'MYZCA', city: 'Cyberjaya' },
     { code: 'MYPEN', city: 'George Town' },
     { code: 'MYIPH', city: 'Ipoh' },
     { code: 'MYJHB', city: 'Johor Bahru' },
@@ -214,7 +222,7 @@ export const UN_LOCODE_CATALOG: Record<CatalogCountry, readonly { code: string; 
     { code: 'MYSDK', city: 'Sandakan' },
     { code: 'MYSHA', city: 'Shah Alam' },
     { code: 'MYSBW', city: 'Sibu' },
-    { code: 'MYSZG', city: 'Subang Jaya' },
+    { code: 'MYSUB', city: 'Subang Jaya' },
     { code: 'MYTPG', city: 'Taiping' }
   ]
 };
@@ -235,9 +243,16 @@ export function catalogCities(country: CatalogCountry): string[] {
 export function cityOf(l: Listing): string | null {
   const code = (l.un_locode ?? '').toUpperCase();
   if (CITY_BY_LOCODE[code]) return CITY_BY_LOCODE[code];
-  if (code.startsWith('TH') || l.jurisdiction === 'TH' || l.currency === 'THB') return 'Thailand';
-  if (code.startsWith('MY') || l.jurisdiction === 'MY' || l.currency === 'MYR') return 'Malaysia';
-  if (code.startsWith('GB') || l.jurisdiction === 'GB' || l.currency === 'GBP') return 'UK';
+  if (code.startsWith('TH')) return 'Thailand';
+  if (code.startsWith('MY')) return 'Malaysia';
+  if (code.startsWith('GB')) return 'UK';
+  const jurisdiction = (l.jurisdiction ?? '').toUpperCase();
+  if (jurisdiction === 'TH') return 'Thailand';
+  if (jurisdiction === 'MY') return 'Malaysia';
+  if (jurisdiction === 'GB') return 'UK';
+  if (l.currency === 'THB') return 'Thailand';
+  if (l.currency === 'MYR') return 'Malaysia';
+  if (l.currency === 'GBP') return 'UK';
   return null;
 }
 
