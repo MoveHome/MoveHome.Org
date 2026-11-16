@@ -16,22 +16,31 @@ export const LOCK_TTL_MS = 30_000;
 // addressable but is never served under the new identity.
 const CACHE_VERSION = 'v2';
 
-// ElevenLabs default curated voice IDs for female / male
-// Default: Female = 21m00Tcm4TlvDq8ikWAM (Rachel), Male = ErXwobaYiN019PkySvjV (Antoni)
-// Overridable via ELEVENLABS_VOICE_ID_FEMALE / ELEVENLABS_VOICE_ID_MALE env vars.
+// ElevenLabs default curated voice IDs for female / male.
+// Thai has its own catalog voices: multilingual v2 and flash v2.5 do not speak
+// Thai at all, and the default English voices are not Thai-native.
+// Overridable via ELEVENLABS_VOICE_ID_FEMALE / _MALE / _TH_FEMALE / _TH_MALE.
 const DEFAULT_FEMALE_VOICE = '21m00Tcm4TlvDq8ikWAM';
 const DEFAULT_MALE_VOICE = 'ErXwobaYiN019PkySvjV';
+const DEFAULT_TH_FEMALE_VOICE = 'brM9iIbwDREZaWL8luun'; // Anna - Thailand Female
+const DEFAULT_TH_MALE_VOICE = 'xVv8qLTTnsYnrysc2Lx4'; // Thai - Deep, Formal and Professional
 
-export function voiceFor(_lang: TtsLang, gender: VoiceGender): string {
+export function voiceFor(lang: TtsLang, gender: VoiceGender): string {
+  if (lang === 'th-TH') {
+    return gender === 'male'
+      ? process.env.ELEVENLABS_VOICE_ID_TH_MALE || DEFAULT_TH_MALE_VOICE
+      : process.env.ELEVENLABS_VOICE_ID_TH_FEMALE || DEFAULT_TH_FEMALE_VOICE;
+  }
   if (gender === 'male') {
     return process.env.ELEVENLABS_VOICE_ID_MALE || DEFAULT_MALE_VOICE;
   }
   return process.env.ELEVENLABS_VOICE_ID_FEMALE || DEFAULT_FEMALE_VOICE;
 }
 
-// Flash v2.5 covers ~32 languages but not Thai; multilingual v2 does.
+// Thai is not in multilingual v2 or flash v2.5; eleven_v3 is the catalog model
+// that supports it (70+ languages).
 export function modelFor(lang: TtsLang): string {
-  return lang === 'th-TH' ? 'eleven_multilingual_v2' : 'eleven_flash_v2_5';
+  return lang === 'th-TH' ? 'eleven_v3' : 'eleven_flash_v2_5';
 }
 
 // Locale comes from the listing when the caller omits it; an explicit unknown
@@ -58,16 +67,9 @@ export function cachePath(raia_id: string, lang: TtsLang, gender: VoiceGender, h
   return `${cacheDir(raia_id, lang, gender)}/${identity}.mp3`;
 }
 
-// A lease's name is its fencing token: the TTL window it was taken in. The
-// window is a path segment so a whole dead window can be swept at once, and a
-// lease is created with create-if-absent, so exactly one contender per window
-// wins and no lease is ever overwritten or reclaimed by deletion.
-export function leasePath(
-  lang: TtsLang,
-  gender: VoiceGender,
-  raia_id: string,
-  hash: string,
-  at = Date.now()
-) {
-  return `tts/_locks/${lang}/${gender}/${Math.floor(at / LOCK_TTL_MS)}/${raia_id}-${hash}`;
+// One immutable lease per (listing, locale, voice, script). Acquisition is a
+// single create-if-absent upload, so exactly one contender can own it; there is
+// no window boundary for two contenders to straddle.
+export function leasePath(lang: TtsLang, gender: VoiceGender, raia_id: string, hash: string) {
+  return `tts/_locks/${lang}/${gender}/${raia_id}-${hash}`;
 }

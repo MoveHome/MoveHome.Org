@@ -81,14 +81,19 @@ export function resolveDefaultCountry(ipCountry: string | null | undefined): Cat
 export type TtsLocale = 'en-GB' | 'th-TH' | 'ms-MY' | 'ja-JP';
 
 // The spoken locale, shared by the request, the prefetch and the browser
-// fallback so every market reaches its own voice.
+// fallback so every market reaches its own voice. Location (UN/LOCODE) wins
+// over currency: a Kyoto property priced in THB is still Japanese.
 export function ttsLocaleOf(l: Listing): TtsLocale {
+  const locode = (l.un_locode ?? '').toUpperCase();
+  if (locode.startsWith('GB')) return 'en-GB';
+  if (locode.startsWith('TH')) return 'th-TH';
+  if (locode.startsWith('MY')) return 'ms-MY';
+  if (locode.startsWith('JP')) return 'ja-JP';
+  if (l.jurisdiction === 'JP') return 'ja-JP';
   const country = countryOf(l);
   if (country === 'TH') return 'th-TH';
   if (country === 'MY') return 'ms-MY';
-  if (l.jurisdiction === 'JP' || (l.un_locode ?? '').toUpperCase().startsWith('JP') || l.currency === 'JPY') {
-    return 'ja-JP';
-  }
+  if (l.currency === 'JPY') return 'ja-JP';
   return 'en-GB';
 }
 

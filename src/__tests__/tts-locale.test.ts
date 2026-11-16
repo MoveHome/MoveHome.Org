@@ -28,6 +28,13 @@ describe('ttsLocaleOf', () => {
     expect(ttsLocaleOf(listing({ jurisdiction: 'GB', un_locode: 'MYKUL' }))).toBe('ms-MY');
     expect(ttsLocaleOf(listing({ jurisdiction: 'GB', currency: 'THB' }))).toBe('th-TH');
   });
+
+  it('lets the location win over a mismatched currency', () => {
+    // A Kyoto property priced in THB is still Japanese, and vice versa.
+    expect(ttsLocaleOf(listing({ un_locode: 'JPKYO', currency: 'THB' }))).toBe('ja-JP');
+    expect(ttsLocaleOf(listing({ un_locode: 'THBKK', currency: 'JPY' }))).toBe('th-TH');
+    expect(ttsLocaleOf(listing({ jurisdiction: 'JP', currency: 'THB' }))).toBe('ja-JP');
+  });
 });
 
 describe('voiceMatchesGender', () => {

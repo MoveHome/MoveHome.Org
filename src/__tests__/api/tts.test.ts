@@ -14,6 +14,8 @@ const state = vi.hoisted(() => ({
   uploadFails: false,
   // Simulates only the rate-limit markers being unwritable.
   budgetFails: false,
+  // Simulates the marker upload returning an error object instead of throwing.
+  budgetError: false,
   readFails: false,
   // Simulates the Storage client failing to initialise at all.
   storeFails: false
@@ -41,6 +43,9 @@ vi.mock('@/lib/supabase-admin', () => ({
           // create-if-absent when upsert is false, like the real bucket.
           upload: async (path: string, file: Blob, opts?: { upsert?: boolean }) => {
             if (path.startsWith('tts/_budget/') && state.budgetFails) throw new Error('budget down');
+            if (path.startsWith('tts/_budget/') && state.budgetError) {
+              return { data: null, error: { message: '503 service unavailable' } };
+            }
             if (state.uploadFails && !path.startsWith('tts/_budget/')) throw new Error('storage write down');
             if (!opts?.upsert && state.files.has(path)) return { data: null, error: { message: 'exists' } };
             state.files.set(path, file);
@@ -122,6 +127,7 @@ function providerOk() {
     state.times.clear();
     state.uploadFails = false;
     state.budgetFails = false;
+    state.budgetError = false;
     state.readFails = false;
     state.storeFails = false;
     process.env.TRUST_PROXY = 'true';
@@ -134,7 +140,9 @@ describe('voice selection', () => {
   it('maps locale and gender to ElevenLabs voice ID or env override', () => {
     expect(voiceFor('en-GB', 'female')).toBe('21m00Tcm4TlvDq8ikWAM');
     expect(voiceFor('en-GB', 'male')).toBe('ErXwobaYiN019PkySvjV');
-    expect(voiceFor('th-TH', 'male')).toBe('ErXwobaYiN019PkySvjV');
+    // Thai uses catalog Thai voices, not the English defaults.
+    expect(voiceFor('th-TH', 'male')).toBe('xVv8qLTTnsYnrysc2Lx4');
+    expect(voiceFor('th-TH', 'female')).toBe('brM9iIbwDREZaWL8luun');
   });
 
   it('derives the locale from the listing when omitted, matching the client resolver', () => {
@@ -267,7 +275,7 @@ describe('GET /api/tts', () => {
     expect(state.files.has(pathOf(l))).toBe(true);
   });
 
-  it('sends multilingual v2 for Thai, which flash v2.5 does not speak', async () => {
+  it('sends eleven_v3 for Thai, which multilingual v2 and flash v2.5 do not speak', async () => {
     const en = listing({ marketing_description: 'model choice english.' });
     const th = listing({
       jurisdiction: 'TH',
@@ -280,23 +288,52 @@ describe('GET /api/tts', () => {
     const enFetch = providerOk();
     expect((await get(`raia_id=${en.raia_id}&lang=en-GB`, 'ip-model-en')).status).toBe(200);
     expect(JSON.parse(enFetch.mock.calls[0][1]?.body ?? '{}').model_id).toBe('eleven_flash_v2_5');
-    expect(modelFor('th-TH')).toBe('eleven_multilingual_v2');
+    expect(modelFor('th-TH')).toBe('eleven_v3');
 
     state.listing = th;
     const thFetch = providerOk();
     expect((await get(`raia_id=${th.raia_id}&lang=th-TH&gender=male`, 'ip-model-th')).status).toBe(200);
-    expect(JSON.parse(thFetch.mock.calls[0][1]?.body ?? '{}').model_id).toBe('eleven_multilingual_v2');
-    expect(voiceFor('th-TH', 'male')).toBe('ErXwobaYiN019PkySvjV');
+    const thBody = JSON.parse(thFetch.mock.calls[0][1]?.body ?? '{}');
+    expect(thBody.model_id).toBe('eleven_v3');
+    expect(thBody.language_code).toBe('th');
+    expect(voiceFor('th-TH', 'male')).toBe('xVv8qLTTnsYnrysc2Lx4');
   });
 
-  it('refuses to synthesise when the shared budget cannot be recorded', async () => {
+  it('falls back to the local budget when the shared marker cannot be written', async () => {
     const l = listing({ marketing_description: 'unwritable budget test.' });
     state.listing = l;
     state.budgetFails = true;
     const fetchMock = providerOk();
 
-    expect((await get(`raia_id=${l.raia_id}`, 'ip-budget-down')).status).toBe(429);
-    expect(fetchMock).not.toHaveBeenCalled();
+    // A Storage transport failure is not a rate-limit denial: the request is
+    // still metered, but by this instance's counter.
+    expect((await get(`raia_id=${l.raia_id}`, 'ip-budget-down')).status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats a returned marker error as a transport failure, not a 429', async () => {
+    const l = listing({ marketing_description: 'returned budget error test.' });
+    state.listing = l;
+    state.budgetError = true;
+    const fetchMock = providerOk();
+
+    expect((await get(`raia_id=${l.raia_id}`, 'ip-budget-error')).status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('still limits billable misses locally while the shared marker is unwritable', async () => {
+    const l = listing({ marketing_description: 'local budget fallback test.' });
+    state.listing = l;
+    state.budgetFails = true;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 500, text: async () => 'down' }))
+    );
+
+    for (let i = 0; i < 10; i++) {
+      expect((await get(`raia_id=${l.raia_id}`, 'ip-budget-local')).status).toBe(502);
+    }
+    expect((await get(`raia_id=${l.raia_id}`, 'ip-budget-local')).status).toBe(429);
   });
 
   it('synthesises once for simultaneous misses', async () => {
@@ -460,6 +497,20 @@ describe('GET /api/tts', () => {
     expect((await get(`raia_id=${v1.raia_id}`, 'ip-concurrent')).status).toBe(200);
     expect(state.files.has(pathOf(v1))).toBe(true);
     expect(state.files.has(pathOf(v3))).toBe(true);
+  });
+
+  it('keeps a version published between the cleanup reads even when its mtime is old', async () => {
+    const v1 = listing({ marketing_description: 'late publish cleanup v1.' });
+    const v2 = { ...v1, rent_pcm: 7300 };
+    // Request reads v1; cleanup's first read still sees v1; by the final read
+    // v2 is the current script. v2's object clock is old, so only the re-read
+    // can protect it.
+    state.queue = [v1, v1, v2];
+    seed(pathOf(v2), [6], Date.now() - 10 * 60_000);
+    providerOk();
+
+    expect((await get(`raia_id=${v1.raia_id}`, 'ip-late-publish')).status).toBe(200);
+    expect(state.files.has(pathOf(v2))).toBe(true);
   });
 
   it('never serves audio stored under the pre-ElevenLabs cache key', async () => {

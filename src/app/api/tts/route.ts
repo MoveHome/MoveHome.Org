@@ -146,42 +146,46 @@ async function claim(
   owner: string
 ): Promise<Claim> {
   const now = Date.now();
-  const startKey = leasePath(lang, gender, raia_id, hash, now);
+  const key = leasePath(lang, gender, raia_id, hash);
   if (store) {
     try {
-      const slot = Math.floor(now / ttlMs);
-      for (let s = slot; s <= slot + 1; s++) {
-        // The previous window is immutable, so reading it is sound: a live
-        // holder there means the next window must not open yet.
-        const prev = await readLease(store, leasePath(lang, gender, raia_id, hash, (s - 1) * ttlMs));
-        if (prev?.expiresAt && prev.expiresAt > now) return { state: 'busy', key: '' };
-        const key = leasePath(lang, gender, raia_id, hash, s * ttlMs);
-        const res = await bucketOf(store).upload(key, leaseBlob(owner, now + ttlMs), {
+      const res = await bucketOf(store).upload(key, leaseBlob(owner, now + ttlMs), {
+        contentType: 'application/json',
+        upsert: false
+      });
+      if (!res.error) return { state: 'claimed', key };
+      if (!isAlreadyExistsError(res.error)) {
+        console.error('[tts] claim storage upload error, falling back to local:', res.error);
+      } else {
+        const held = await readLease(store, key);
+        // The upload said the key exists, so a null read is a transport
+        // failure, not an absent lease: never delete a lock we cannot read.
+        if (!held) return { state: 'busy', key: '' };
+        if (held.expiresAt && held.expiresAt > now) return { state: 'busy', key: '' };
+        // Expired: remove and re-create. The re-create is still create-if-absent,
+        // so only one of several takers can win; the loser sees 'exists' and
+        // waits instead of paying for a second synthesis.
+        await bucketOf(store).remove([key]);
+        const retry = await bucketOf(store).upload(key, leaseBlob(owner, now + ttlMs), {
           contentType: 'application/json',
           upsert: false
         });
-        if (!res.error) return { state: 'claimed', key };
-        if (!isAlreadyExistsError(res.error)) {
-          console.error('[tts] claim storage upload error, falling back to local:', res.error);
-          break;
-        }
-        // Lost the create: this owner holds the window unless it has expired,
-        // in which case the next window is the contender's to take.
-        const held = await readLease(store, key);
-        if (held?.expiresAt && held.expiresAt > now) return { state: 'busy', key: '' };
+        if (!retry.error) return { state: 'claimed', key };
+        if (isAlreadyExistsError(retry.error)) return { state: 'busy', key: '' };
+        console.error('[tts] claim takeover error, falling back to local:', retry.error);
       }
     } catch (err) {
       console.error('[tts] claim storage exception, falling back to local:', err);
     }
   }
 
-  const held = localClaims.get(startKey);
+  const held = localClaims.get(key);
   if (held && held.expiresAt > now) return { state: 'busy', key: '' };
   if (localClaims.size > 5_000) {
     for (const [k, v] of localClaims) if (v.expiresAt <= now) localClaims.delete(k);
   }
-  localClaims.set(startKey, { owner, expiresAt: now + ttlMs });
-  return { state: 'local', key: startKey };
+  localClaims.set(key, { owner, expiresAt: now + ttlMs });
+  return { state: 'local', key };
 }
 
 // `store` is passed only when the Storage lease is known to be ours: after an
@@ -222,7 +226,9 @@ async function dropPrefix(prefix: string, store: Store) {
   }
 }
 
-function withinLocalBudget(ip: string): boolean {
+// Counts one billable miss against this instance. Only called when the shared
+// marker could not be written, so a healthy Storage path never inflates it.
+function consumeLocalBudget(ip: string): boolean {
   const window = Math.floor(Date.now() / MISS_WINDOW_MS);
   const seen = localMiss.get(ip);
   const count = seen && seen.window === window ? seen.count : 0;
@@ -236,14 +242,13 @@ function withinLocalBudget(ip: string): boolean {
 
 // Storage markers are per client per minute, named by a hash so the bucket
 // never holds an IP address. A marker we can neither write nor confirm is a
-// denial, not a grant: an unverifiable budget must not become a free
-// synthesis window.
-// shortcut: if Storage is unreachable entirely (no client at all) only the
-// per-instance counter applies, so a cold instance can add one window's worth;
-// move to a Postgres counter when that ceiling matters.
+// transport failure, not a denial: fall back to the per-instance counter so an
+// outage neither 429s a legitimate client nor lets it synthesise unmetered.
+// shortcut: the fallback is per instance, so N instances can each spend one
+// window's budget during an outage; move to a Postgres counter when that
+// ceiling matters.
 async function withinMissBudget(ip: string, store: Store | null): Promise<boolean> {
-  if (!withinLocalBudget(ip)) return false;
-  if (!store) return true;
+  if (!store) return consumeLocalBudget(ip);
   const window = Math.floor(Date.now() / MISS_WINDOW_MS);
   const client = createHash('sha256').update(ip).digest('hex').slice(0, 16);
   const dir = `tts/_budget/${client}/${window}`;
@@ -257,9 +262,11 @@ async function withinMissBudget(ip: string, store: Store | null): Promise<boolea
         dropPrefix(`tts/_budget/${client}/${window - 2}`, store);
         return true;
       }
-      if (!isAlreadyExistsError(res.error)) return false;
+      // A taken slot means the shared limit is still being counted; any other
+      // error is a transport failure and must not become a false 429.
+      if (!isAlreadyExistsError(res.error)) return consumeLocalBudget(ip);
     } catch {
-      return false;
+      return consumeLocalBudget(ip);
     }
   }
   return false;
@@ -299,7 +306,9 @@ async function synthesize(
         },
         body: JSON.stringify({
           text: script,
-          model_id: modelId
+          model_id: modelId,
+          // v3 needs the language hint for Thai; other models infer it.
+          ...(lang === 'th-TH' ? { language_code: 'th' } : {})
         }),
         signal: controller.signal
       }
@@ -375,9 +384,10 @@ async function retryPendingWrites(store: Store | null) {
 
 // One file per (listing, locale, voice). Delete only objects that are neither
 // the listing's *current* script nor the file just written, and that had been
-// sitting untouched for PRUNE_GRACE_MS: a version written by a concurrent
-// request after that read is never ours to remove, and a just-written current
-// file cannot be mistaken for stale by a coarse object clock.
+// sitting untouched for PRUNE_GRACE_MS. The listing is re-read after the object
+// list and again before the delete, so a version published while this pass was
+// running is never removed; the grace window covers a write that lands between
+// the last read and the delete.
 async function prune(
   raia_id: string,
   lang: TtsLang,
@@ -387,9 +397,9 @@ async function prune(
 ) {
   try {
     const readAt = Date.now();
-    const fresh = await getListingByRaiaId(raia_id);
     const dir = cacheDir(raia_id, lang, gender);
     const listed = await bucketOf(store).list(dir);
+    const fresh = await getListingByRaiaId(raia_id);
     const validPaths = new Set<string>([writtenPath]);
     if (fresh) {
       validPaths.add(cachePath(raia_id, lang, gender, scriptHash(scriptFor(fresh))));
@@ -406,10 +416,17 @@ async function prune(
           f.at < readAt - PRUNE_GRACE_MS
       )
       .map((f) => f.path);
-    if (stale.length) await bucketOf(store).remove(stale);
-    // Leases are immutable per window: a window two deep has expired for good.
-    const deadSlot = Math.floor((readAt - 2 * LOCK_TTL_MS) / LOCK_TTL_MS);
-    await dropPrefix(`tts/_locks/${lang}/${gender}/${deadSlot}`, store);
+    if (!stale.length) return;
+    // A newer version may have been published after the first read: re-check
+    // the current path immediately before deleting.
+    const latest = await getListingByRaiaId(raia_id);
+    if (latest) {
+      const current = cachePath(raia_id, lang, gender, scriptHash(scriptFor(latest)));
+      const keep = stale.filter((p) => p !== current);
+      if (keep.length) await bucketOf(store).remove(keep);
+    } else {
+      await bucketOf(store).remove(stale);
+    }
   } catch (err) {
     console.error('[tts] stale cleanup skipped:', err);
   }
