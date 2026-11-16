@@ -377,7 +377,7 @@ async function collectSearchPages(card, params, credentials, fetchPage) {
   return items.slice(0, MAX_PAGINATED_ITEMS);
 }
 
-/** A2A search needs un_locode + transaction_type; env wins, LOCODE-shaped registry jurisdictions are the fallback. */
+/** A2A search needs un_locode + a transaction/service type; env wins, LOCODE-shaped registry jurisdictions are the fallback. */
 function searchParams(agent) {
   const jurisdictions = Array.isArray(agent.jurisdictions) ? agent.jurisdictions : [];
   const params = {
@@ -387,6 +387,31 @@ function searchParams(agent) {
   const locode = process.env.RAIA_A2A_UN_LOCODE || jurisdictions.find(j => checkPattern(j, "^[A-Z]{2}[A-Z0-9]{3}$"));
   if (locode) params.un_locode = locode;
   return params;
+}
+
+// Peers disagree on the search vocabulary: EA-style cards require transaction_type
+// (LETTINGS/SALES), MoveHome-style require service_type (long_term/short_term/sale).
+// Both schemas are strict, so when a peer names transaction_type as unrecognised,
+// ask again in its terms once (issue #80).
+const SERVICE_TYPE_BY_TRANSACTION = { LETTINGS: "long_term", SALES: "sale" };
+
+function alternateSearchParams(params, error) {
+  const { transaction_type, ...rest } = params;
+  if (!transaction_type || !String(error?.message ?? "").includes("'transaction_type'")) return null;
+  const service_type = SERVICE_TYPE_BY_TRANSACTION[transaction_type];
+  return service_type ? { ...rest, service_type } : null;
+}
+
+/** One search, plus the vocabulary retry strict peers force on us. */
+async function searchPeer(card, params, credentials, fetchPage) {
+  try {
+    return await collectSearchPages(card, params, credentials, fetchPage);
+  } catch (e) {
+    const alt = alternateSearchParams(params, e);
+    if (!alt) throw e;
+    vlog(`peer rejected transaction_type; retrying as service_type=${alt.service_type}`);
+    return collectSearchPages(card, alt, credentials, fetchPage);
+  }
 }
 
 /** Bearer credentials. DDL-verified: tbl_raia_agent_registry has no credential column, so env is the only live source today. */
@@ -520,7 +545,7 @@ async function crawlAgent(agent) {
 
   let searchResults;
   try {
-    searchResults = await collectSearchPages(card, searchParams(agent), credentialsFor(agent), req =>
+    searchResults = await searchPeer(card, searchParams(agent), credentialsFor(agent), req =>
       fetchImpl(req.url, {
         timeoutMs: FETCH_TIMEOUT_SEARCH_MS,
         label:     `search[${agent_id}]`,

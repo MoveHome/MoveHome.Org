@@ -172,6 +172,46 @@ describe('RAIA flat-A2A ingest (F8d)', () => {
     expect(staleScans).toBe(1); // sweep armed only because rows were written
   });
 
+  it('retries a peer that rejects transaction_type with service_type (#80)', async () => {
+    const sent: Record<string, unknown>[] = [];
+    const strictFetch: FetchFn = async (url, opts) => {
+      if (url.includes('/.well-known/')) return FLAT_CARD;
+      const body = opts.body as { params: { message: { parts: { data: { params: Record<string, unknown> } }[] } } };
+      const params = body.params.message.parts[0].data.params;
+      sent.push(params);
+      // MoveHome.org's strict search schema: service_type only.
+      if ('transaction_type' in params) {
+        return {
+          jsonrpc: '2.0',
+          id: 'crawl-test',
+          result: {
+            status: {
+              state: 'failed',
+              message: {
+                parts: [
+                  { kind: 'text', text: "Invalid parameters: (root): Unrecognized key(s) in object: 'transaction_type'" },
+                ],
+              },
+            },
+          },
+        };
+      }
+      return envelope([eaItem('prop-gb-rlf-000018')]);
+    };
+    setFetch(strictFetch);
+    const summary = await crawlAgent({
+      agent_id: 'org-gb-mcptest',
+      agent_card_url: 'https://movehome.org/.well-known/agent-card.json',
+      jurisdictions: ['GBLON'],
+    });
+    expect(summary.status).toBe('ok');
+    expect(summary.listings_seen).toBe(1);
+    expect(sent).toEqual([
+      { transaction_type: 'LETTINGS', limit: 50, un_locode: 'GBLON' },
+      { service_type: 'long_term', limit: 50, un_locode: 'GBLON' },
+    ]);
+  });
+
   it('rejects a malformed item and counts it instead of dropping it silently', async () => {
     setFetch(
       flatFetch([
