@@ -10,7 +10,9 @@ const state = vi.hoisted(() => ({
   queue: [] as (Listing | null)[],
   files: new Map<string, Blob>(),
   uploadFails: false,
-  readFails: false
+  readFails: false,
+  // Simulates the Storage client failing to initialise at all.
+  storeFails: false
 }));
 
 vi.mock('@/lib/queries', () => ({
@@ -22,37 +24,40 @@ vi.mock('@/lib/agent-directory', () => ({
 }));
 
 vi.mock('@/lib/supabase-admin', () => ({
-  createSupabaseAdminClient: () => ({
-    storage: {
-      from: () => ({
-        download: async (path: string) => {
-          if (state.readFails) throw new Error('storage read down');
-          const file = state.files.get(path);
-          return file ? { data: file, error: null } : { data: null, error: { message: 'not found' } };
-        },
-        // create-if-absent when upsert is false, like the real bucket.
-        upload: async (path: string, file: Blob, opts?: { upsert?: boolean }) => {
-          if (state.uploadFails) throw new Error('storage write down');
-          if (!opts?.upsert && state.files.has(path)) return { data: null, error: { message: 'exists' } };
-          state.files.set(path, file);
-          return { data: {}, error: null };
-        },
-        list: async (prefix: string) => {
-          if (state.readFails) throw new Error('storage list down');
-          return {
-            data: [...state.files.keys()]
-              .filter((k) => k.startsWith(`${prefix}/`))
-              .map((k) => ({ name: k.slice(prefix.length + 1) })),
-            error: null
-          };
-        },
-        remove: async (paths: string[]) => {
-          paths.forEach((p) => state.files.delete(p));
-          return { data: [], error: null };
-        }
-      })
-    }
-  })
+  createSupabaseAdminClient: () => {
+    if (state.storeFails) throw new Error('storage not initialised');
+    return {
+      storage: {
+        from: () => ({
+          download: async (path: string) => {
+            if (state.readFails) throw new Error('storage read down');
+            const file = state.files.get(path);
+            return file ? { data: file, error: null } : { data: null, error: { message: 'not found' } };
+          },
+          // create-if-absent when upsert is false, like the real bucket.
+          upload: async (path: string, file: Blob, opts?: { upsert?: boolean }) => {
+            if (state.uploadFails) throw new Error('storage write down');
+            if (!opts?.upsert && state.files.has(path)) return { data: null, error: { message: 'exists' } };
+            state.files.set(path, file);
+            return { data: {}, error: null };
+          },
+          list: async (prefix: string) => {
+            if (state.readFails) throw new Error('storage list down');
+            return {
+              data: [...state.files.keys()]
+                .filter((k) => k.startsWith(`${prefix}/`))
+                .map((k) => ({ name: k.slice(prefix.length + 1) })),
+              error: null
+            };
+          },
+          remove: async (paths: string[]) => {
+            paths.forEach((p) => state.files.delete(p));
+            return { data: [], error: null };
+          }
+        })
+      }
+    };
+  }
 }));
 
 const listing = (overrides: Partial<Listing> = {}): Listing =>
@@ -95,6 +100,7 @@ beforeEach(() => {
   state.files.clear();
   state.uploadFails = false;
   state.readFails = false;
+  state.storeFails = false;
   process.env.GOOGLE_TTS_API_KEY = 'test-key';
   delete process.env.GEMINI_API_KEY;
 });
@@ -262,7 +268,10 @@ describe('GET /api/tts', () => {
 
     expect(res.status).toBe(200);
     expect(state.files.has(pathOf(v2))).toBe(true);
-    expect(state.files.has(pathOf(v1))).toBe(false);
+    // v1 stays too: cleanup never deletes the file this request just wrote, so
+    // a concurrent reader cannot lose it. A later write prunes it.
+    expect(state.files.has(pathOf(v1))).toBe(true);
+    expect(await res.arrayBuffer()).toBeTruthy();
   });
 
   it('retries persisting memory-only audio after a storage outage', async () => {
@@ -312,5 +321,69 @@ describe('GET /api/tts', () => {
     expect(limited.headers.get('Retry-After')).toBe('60');
     // Another client is unaffected.
     expect((await get(`raia_id=${l.raia_id}`, 'ip-other')).status).toBe(502);
+  });
+
+  it('answers retry instead of paying for a second synthesis while the lease is held', async () => {
+    const l = listing({ marketing_description: 'held lease test property.' });
+    state.listing = l;
+    const fetchMock = googleOk();
+    const hash = scriptHash(buildPropertyDescriptionWithCta(l, 'Acme Estates'));
+    state.files.set(
+      `tts/_locks/en-GB/female/${l.raia_id}-${hash}`,
+      new Blob([JSON.stringify({ owner: 'other-worker', expiresAt: Date.now() + 60_000 })])
+    );
+
+    vi.useFakeTimers();
+    try {
+      const pending = get(`raia_id=${l.raia_id}`, 'ip-lease');
+      await vi.advanceTimersByTimeAsync(6000);
+      const res = await pending;
+      expect(res.status).toBe(503);
+      expect(res.headers.get('Retry-After')).toBe('5');
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stores memory-only audio once Storage initialisation recovers', async () => {
+    const l = listing({ marketing_description: 'storage init outage test.' });
+    state.listing = l;
+    const fetchMock = googleOk();
+    state.storeFails = true;
+
+    const first = await get(`raia_id=${l.raia_id}`, 'ip-init');
+    expect(first.status).toBe(200);
+    expect(state.files.has(pathOf(l))).toBe(false);
+
+    state.storeFails = false;
+    expect((await get(`raia_id=${l.raia_id}`, 'ip-init')).status).toBe(200);
+    expect(state.files.has(pathOf(l))).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('meters billable misses locally while Storage is down', async () => {
+    const l = listing({ marketing_description: 'storage-down budget test.' });
+    state.listing = l;
+    state.storeFails = true;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 500, text: async () => 'down' }))
+    );
+
+    for (let i = 0; i < 10; i++) {
+      expect((await get(`raia_id=${l.raia_id}`, 'ip-down')).status).toBe(502);
+    }
+    expect((await get(`raia_id=${l.raia_id}`, 'ip-down')).status).toBe(429);
+  });
+
+  it('never deletes the audio it just wrote when the listing re-read lags behind', async () => {
+    const v1 = listing({ marketing_description: 'stale read cleanup v1.' });
+    const v0 = listing({ marketing_description: 'stale read cleanup v0.' });
+    state.queue = [v1, v0];
+    googleOk();
+
+    expect((await get(`raia_id=${v1.raia_id}`, 'ip-stale-read')).status).toBe(200);
+    expect(state.files.has(pathOf(v1))).toBe(true);
   });
 });

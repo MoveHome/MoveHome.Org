@@ -20,21 +20,25 @@ const BUCKET = 'tts-audio';
 const CACHE_CONTROL = 'no-store';
 const MISS_LIMIT = 10; // billable syntheses per client per minute
 const MISS_WINDOW_MS = 60_000;
-const LOCK_TTL_MS = 120_000;
+const LOCK_TTL_MS = 30_000; // covers the 8s provider call plus the write
 const LOCK_WAIT_MS = 5_000;
 const LOCK_POLL_MS = 150;
 
 type Store = ReturnType<typeof createSupabaseAdminClient>;
 type BucketApi = ReturnType<Store['storage']['from']>;
+type Claim = 'claimed' | 'busy' | 'local';
 
 // shortcut: per-instance memory cache stays as the no-Storage fallback; the
 // bucket is the shared copy once provisioned.
 const cache = new Map<string, ArrayBuffer>();
 // Synthesised on this instance but the shared write failed — retry it later.
 const pendingWrite = new Set<string>();
-// Claims are zero-byte Storage objects so instances agree on who is working;
-// without Storage only this instance can be coordinated (expiry as the value).
-const localClaims = new Map<string, number>();
+// Claims are lease objects so instances agree on who is working; without
+// Storage only this instance can be coordinated.
+const localClaims = new Map<string, { owner: string; expiresAt: number }>();
+// Local miss counter, used only while Storage is unavailable: an outage must
+// neither bypass nor invent the per-client billable limit.
+const localMiss = new Map<string, { window: number; count: number }>();
 
 function setCache(key: string, value: ArrayBuffer) {
   if (cache.size >= MAX_CACHE_ENTRIES) {
@@ -76,38 +80,45 @@ function isAlreadyExistsError(err: { message?: string } | null): boolean {
   return msg.includes('exists') || msg.includes('duplicate') || msg.includes('already');
 }
 
-// Create-if-absent: true when this caller now owns `key`. A Storage outage
-// falls back to local in-memory coordination rather than bypassing rate limits
-// or 429-ing every request during an incident.
-async function claim(key: string, store: Store | null, ttlMs: number): Promise<boolean> {
+function leaseOwner(): string {
+  return `${process.pid}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+function leaseBlob(owner: string, expiresAt: number) {
+  return new Blob([JSON.stringify({ owner, expiresAt })], { type: 'application/json' });
+}
+
+async function readLease(
+  store: Store,
+  key: string
+): Promise<{ owner?: string; expiresAt?: number } | null> {
+  try {
+    const hit = await bucketOf(store).download(key);
+    if (hit.error || !hit.data) return null;
+    return JSON.parse(await hit.data.text()) as { owner?: string; expiresAt?: number };
+  } catch {
+    return null;
+  }
+}
+
+// Own `key` until the lease expires. A Storage outage falls back to this
+// instance's lease instead of bypassing the lock for every request.
+async function claim(key: string, store: Store | null, ttlMs: number, owner: string): Promise<Claim> {
   const now = Date.now();
   if (store) {
+    const payload = leaseBlob(owner, now + ttlMs);
+    const opts = { contentType: 'application/json' };
     try {
-      const payload = JSON.stringify({ expiresAt: now + ttlMs });
-      const res = await bucketOf(store).upload(key, new Blob([payload], { type: 'application/json' }), {
-        contentType: 'application/json',
-        upsert: false
-      });
-      if (!res.error) return true;
+      const res = await bucketOf(store).upload(key, payload, { ...opts, upsert: false });
+      if (!res.error) return 'claimed';
       if (isAlreadyExistsError(res.error)) {
-        // Inspect lock marker for expiration
-        const hit = await bucketOf(store).download(key);
-        if (hit.data) {
-          try {
-            const text = await hit.data.text();
-            const data = JSON.parse(text) as { expiresAt?: number };
-            if (data.expiresAt && data.expiresAt < now) {
-              const over = await bucketOf(store).upload(key, new Blob([payload], { type: 'application/json' }), {
-                contentType: 'application/json',
-                upsert: true
-              });
-              if (!over.error) return true;
-            }
-          } catch {
-            // Ignore parse errors, treat lock as active
-          }
+        const held = await readLease(store, key);
+        if (held?.expiresAt && held.expiresAt < now) {
+          // Takeover, then read back: two instances racing here cannot both win.
+          await bucketOf(store).upload(key, payload, { ...opts, upsert: true });
+          if ((await readLease(store, key))?.owner === owner) return 'claimed';
         }
-        return false;
+        return 'busy';
       }
       console.error('[tts] claim storage upload error, falling back to local:', res.error);
     } catch (err) {
@@ -116,18 +127,20 @@ async function claim(key: string, store: Store | null, ttlMs: number): Promise<b
   }
 
   const held = localClaims.get(key);
-  if (held && held > now) return false;
-  if (localClaims.size > 5_000) for (const [k, exp] of localClaims) if (exp <= now) localClaims.delete(k);
-  localClaims.set(key, now + ttlMs);
-  return true;
+  if (held && held.expiresAt > now) return 'busy';
+  if (localClaims.size > 5_000) {
+    for (const [k, v] of localClaims) if (v.expiresAt <= now) localClaims.delete(k);
+  }
+  localClaims.set(key, { owner, expiresAt: now + ttlMs });
+  return 'local';
 }
 
-async function release(key: string, store: Store | null) {
-  if (!store) {
-    localClaims.delete(key);
-    return;
-  }
+async function release(key: string, store: Store | null, owner: string) {
+  if (localClaims.get(key)?.owner === owner) localClaims.delete(key);
+  if (!store) return;
   try {
+    // Never delete a lease another instance took over.
+    if ((await readLease(store, key))?.owner !== owner) return;
     await bucketOf(store).remove([key]);
   } catch (err) {
     console.error('[tts] claim release failed:', err);
@@ -156,16 +169,33 @@ async function dropPrefix(prefix: string, store: Store) {
   }
 }
 
+function withinLocalBudget(ip: string): boolean {
+  const window = Math.floor(Date.now() / MISS_WINDOW_MS);
+  const seen = localMiss.get(ip);
+  const count = seen && seen.window === window ? seen.count : 0;
+  if (count >= MISS_LIMIT) return false;
+  if (localMiss.size > 5_000) {
+    for (const [k, v] of localMiss) if (v.window !== window) localMiss.delete(k);
+  }
+  localMiss.set(ip, { window, count: count + 1 });
+  return true;
+}
+
 // Shared abuse control: at most MISS_LIMIT billable misses per client per
 // minute, agreed across instances through create-if-absent slot markers.
 async function withinMissBudget(ip: string, store: Store | null): Promise<boolean> {
+  if (!store) return withinLocalBudget(ip);
   const window = Math.floor(Date.now() / MISS_WINDOW_MS);
   const dir = `tts/_budget/${ip}/${window}`;
   for (let slot = 0; slot < MISS_LIMIT; slot++) {
-    if (await claim(`${dir}/${slot}`, store, MISS_WINDOW_MS)) {
-      if (store) void dropPrefix(`tts/_budget/${ip}/${window - 1}`, store);
+    const res = await claim(`${dir}/${slot}`, store, MISS_WINDOW_MS, `budget-${ip}-${window}`);
+    if (res === 'claimed') {
+      void dropPrefix(`tts/_budget/${ip}/${window - 1}`, store);
       return true;
     }
+    // Storage transport failure: count locally rather than 429-ing or letting
+    // the request through unmetered.
+    if (res === 'local') return withinLocalBudget(ip);
   }
   return false;
 }
@@ -240,7 +270,11 @@ async function persist(
   audio: ArrayBuffer,
   store: Store | null
 ) {
-  if (!store) return;
+  if (!store) {
+    // Storage not initialised yet: keep the audio and upload it once it is.
+    pendingWrite.add(path);
+    return;
+  }
   try {
     const up = await bucketOf(store).upload(path, new Blob([audio], { type: 'audio/mpeg' }), {
       contentType: 'audio/mpeg',
@@ -276,7 +310,7 @@ async function prune(
     const listed = await bucketOf(store).list(dir);
     const stale = (listed.data ?? [])
       .map((e) => `${dir}/${e.name}`)
-      .filter((p) => p.endsWith('.mp3') && p !== currentListingPath);
+      .filter((p) => p.endsWith('.mp3') && p !== currentListingPath && p !== writtenPath);
     if (stale.length) await bucketOf(store).remove(stale);
   } catch (err) {
     console.error('[tts] stale cleanup skipped:', err);
@@ -344,40 +378,34 @@ export async function GET(request: Request) {
     }
 
     const lock = `tts/_locks/${lang}/${gender}/${raia_id}-${hash}`;
+    const owner = leaseOwner();
+    let held = false;
     try {
-      if (await claim(lock, store, LOCK_TTL_MS)) {
-        try {
-          audio = cache.get(path) ?? (await download(path, store));
-          if (!audio) {
-            audio = await synthesize(apiKey, script, lang, gender);
-            setCache(path, audio);
-            await persist(raia_id, lang, gender, path, audio, store);
-          }
-        } finally {
-          await release(lock, store);
+      held = (await claim(lock, store, LOCK_TTL_MS, owner)) !== 'busy';
+      if (held) {
+        audio = cache.get(path) ?? (await download(path, store));
+        if (!audio) {
+          audio = await synthesize(apiKey, script, lang, gender);
+          setCache(path, audio);
+          await persist(raia_id, lang, gender, path, audio, store);
         }
       } else {
-        // Another worker is already paying for this exact script: use its
-        // upload, and only synthesise if it never lands (crashed lock holder).
-        audio = await waitForUpload(path, store);
-        if (audio) {
-          setCache(path, audio);
-        } else {
-          audio = cache.get(path) ?? (await download(path, store));
-          if (audio) {
-            setCache(path, audio);
-          } else {
-            audio = await synthesize(apiKey, script, lang, gender);
-            setCache(path, audio);
-            await persist(raia_id, lang, gender, path, audio, store);
-          }
+        // Another worker is paying for this exact script: serve its upload.
+        // Past the wait, tell the client to retry rather than paying twice.
+        audio =
+          (await waitForUpload(path, store)) ?? cache.get(path) ?? (await download(path, store));
+        if (!audio) {
+          return json({ error: 'Narration in progress' }, 503, { 'Retry-After': '5' });
         }
+        setCache(path, audio);
       }
     } catch (err) {
       if (err instanceof UpstreamError) {
         return json({ error: err.message }, err.status);
       }
       throw err;
+    } finally {
+      if (held) await release(lock, store, owner);
     }
   }
 
