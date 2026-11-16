@@ -33,6 +33,12 @@ export function scriptHash(script: string): string {
   return createHash('sha256').update(script).digest('hex');
 }
 
+// Provider-prefixed so the Google-era objects at tts/{id}/… are never served
+// as if they were ElevenLabs audio (same script hash, same voice gender).
+export function cacheDir(raia_id: string, lang: TtsLang, gender: VoiceGender) {
+  return `tts/elevenlabs/${raia_id}/${lang}/${gender}`;
+}
+
 export function cachePath(raia_id: string, lang: TtsLang, gender: VoiceGender, hash: string) {
-  return `tts/${raia_id}/${lang}/${gender}/${hash}.mp3`;
+  return `${cacheDir(raia_id, lang, gender)}/${hash}.mp3`;
 }
