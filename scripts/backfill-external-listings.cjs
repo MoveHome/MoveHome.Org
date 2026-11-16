@@ -37,7 +37,7 @@ const { writeTelemetry, touchBookkeeping } = require("./lib/feed-run-guards.cjs"
 
 // ── Env ───────────────────────────────────────────────────────────────────────
 const envLocal = path.join(__dirname, "..", ".env.local");
-if (fs.existsSync(envLocal)) require("dotenv").config({ path: envLocal, quiet: true });
+if (fs.existsSync(envLocal)) process.loadEnvFile(envLocal);
 
 const CACHE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL;
 const CACHE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;

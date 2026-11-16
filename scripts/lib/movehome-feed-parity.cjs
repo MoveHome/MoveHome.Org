@@ -1,5 +1,7 @@
 "use strict";
 
+const { sanitizeDescription } = require("./sanitize-description.cjs");
+
 /**
  * movehome-feed-parity.cjs — pure source-fidelity checks for the ADR-427
  * canonical-snapshot → tbl_external_raia_listings backfill.
@@ -97,9 +99,14 @@ function checkParity(snapshot, row) {
       continue;
     }
     if (!isPopulated(snapshot[field])) { gaps.push(field); continue; }
+    // The mapper intentionally sanitises marketing_description (contact clutter
+    // stripped), so parity compares the row against the expected sanitised value.
+    const expected = field === "marketing_description"
+      ? sanitizeDescription(String(snapshot[field]))
+      : snapshot[field];
     if (!isPopulated(row[field])) mismatches.push(`${field} lost (source=${JSON.stringify(snapshot[field])})`);
-    else if (String(snapshot[field]) !== String(row[field])) {
-      mismatches.push(`${field} changed (source=${JSON.stringify(snapshot[field])} row=${JSON.stringify(row[field])})`);
+    else if (String(expected) !== String(row[field])) {
+      mismatches.push(`${field} changed (source=${JSON.stringify(expected)} row=${JSON.stringify(row[field])})`);
     }
   }
 
