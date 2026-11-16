@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Listing } from '@/lib/types';
 import {
   clusterOf,
+  hasMedia,
   plainText,
   priceLabel,
   specGroups,
@@ -99,5 +100,21 @@ describe('plainText', () => {
   it('strips markup and collapses whitespace', () => {
     expect(plainText('<p>Bright   <b>flat</b></p>')).toBe('Bright flat');
     expect(plainText(null)).toBe('');
+  });
+
+  it('hasMedia is false only when there is no photo or video at all', () => {
+    expect(hasMedia(listing())).toBe(false);
+    expect(hasMedia(listing({ video_url: 'https://cdn/x.mp4' }))).toBe(true);
+    expect(hasMedia(listing({ photo_url: 'https://cdn/x.jpg' }))).toBe(true);
+    expect(hasMedia(listing({ featured_image_url: 'https://cdn/x.jpg' }))).toBe(true);
+    expect(hasMedia(listing({ photos: [{ url: 'https://cdn/x.jpg', order: 0 }] }))).toBe(true);
+  });
+
+  it('re-ranking sinks bare cards without disturbing the media-rich order', () => {
+    const bare = listing({ raia_id: 'prop-gb-mcptest-000001' });
+    const rich = listing({ raia_id: 'prop-a', photo_url: 'https://cdn/a.jpg' });
+    const rich2 = listing({ raia_id: 'prop-b', video_url: 'https://cdn/b.mp4' });
+    const ranked = [bare, rich, rich2].sort((a, b) => Number(hasMedia(b)) - Number(hasMedia(a)));
+    expect(ranked.map((l) => l.raia_id)).toEqual(['prop-a', 'prop-b', 'prop-gb-mcptest-000001']);
   });
 });
