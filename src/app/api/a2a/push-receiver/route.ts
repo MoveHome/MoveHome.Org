@@ -104,6 +104,26 @@ function issuedAt(hdr: ProtectedHeader): number {
   return NaN;
 }
 
+// Read the body with a hard byte cap. A missing or spoofed Content-Length must
+// not let an unauthenticated caller buffer unbounded data before the check.
+async function readCapped(req: Request, limit: number): Promise<Buffer | null> {
+  const reader = req.body?.getReader();
+  if (!reader) return Buffer.alloc(0);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks, total);
+}
+
 export async function POST(req: Request) {
   const requestId = req.headers.get('x-request-id') || randomUUID();
   let nonce: string | undefined;
@@ -111,11 +131,6 @@ export async function POST(req: Request) {
     log(error, requestId, nonce);
     return json({ error, message, requestId }, status);
   };
-
-  const declaredLength = Number(req.headers.get('content-length'));
-  if (Number.isFinite(declaredLength) && declaredLength > MAX_BODY_BYTES) {
-    return fail(413, 'body_too_large', `Body must be at most ${MAX_BODY_BYTES} bytes.`);
-  }
 
   const version = req.headers.get('a2a-version')?.trim() ?? '';
   if (!(version in WIRE)) {
@@ -166,12 +181,17 @@ export async function POST(req: Request) {
     return fail(401, 'stale_timestamp', `JWS timestamp is outside the ${MAX_SKEW_S}s window.`);
   }
 
-  // shortcut: the body is buffered before this check; the content-length
-  // pre-check bounds memory and this bounds parse/JCS work. Upgrade to a
-  // streamed reader if the platform ever admits much larger bodies.
-  const raw = await req.text();
-  if (Buffer.byteLength(raw, 'utf8') > MAX_BODY_BYTES) {
-    return fail(413, 'body_too_large', `Body must be at most ${MAX_BODY_BYTES} bytes.`);
+  const bytes = await readCapped(req, MAX_BODY_BYTES);
+  if (!bytes) return fail(413, 'body_too_large', `Body must be at most ${MAX_BODY_BYTES} bytes.`);
+
+  // Decode strictly: a lossy decode would turn a byte mutation such as 0xFF in
+  // place of EF BF BD into the U+FFFD the sender signed, so the exact bytes
+  // would no longer be what gets verified.
+  let raw: string;
+  try {
+    raw = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return fail(400, 'invalid_body', 'Body must be valid UTF-8.');
   }
 
   let payload: unknown;
@@ -188,7 +208,7 @@ export async function POST(req: Request) {
   // the body the sender signed.
   const jcs = canonicalize(payload);
   if (!jcs) return fail(400, 'invalid_body', 'Body could not be canonicalized.');
-  if (jcs !== raw) {
+  if (!Buffer.from(jcs, 'utf8').equals(bytes)) {
     return fail(400, 'non_canonical_body', 'Body must be the exact canonical bytes that were signed.');
   }
 
@@ -215,7 +235,7 @@ export async function POST(req: Request) {
     await flattenedVerify(
       {
         protected: protectedB64,
-        payload: Buffer.from(raw, 'utf8').toString('base64url'),
+        payload: bytes.toString('base64url'),
         signature: signatureB64
       },
       key

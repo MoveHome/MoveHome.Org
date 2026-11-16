@@ -118,10 +118,15 @@ async function sign(body: unknown, opts: SignOpts = {}) {
   return `${protectedHeader}..${signature}`;
 }
 
-// The wire body is the exact signed bytes: objects are canonicalized (a string
-// is sent verbatim, for raw-body controls).
+// The wire body is the exact signed bytes: objects are canonicalized, a string
+// is sent verbatim (raw-body controls) and bytes are sent verbatim.
 function post(signature: string, body: unknown, version: string, contentType?: string) {
-  const raw = typeof body === 'string' ? body : canonicalize(body as Record<string, unknown>)!;
+  const raw =
+    body instanceof Uint8Array
+      ? body
+      : typeof body === 'string'
+        ? body
+        : canonicalize(body as Record<string, unknown>)!;
   return new Request('https://movehome.org/api/a2a/push-receiver', {
     method: 'POST',
     headers: {
@@ -129,7 +134,7 @@ function post(signature: string, body: unknown, version: string, contentType?: s
       'a2a-version': version,
       'x-a2a-signature': signature
     },
-    body: raw
+    body: raw as BodyInit
   });
 }
 
@@ -298,6 +303,59 @@ describe('POST /api/a2a/push-receiver', () => {
     const deepRes = await POST(post(await sign(bomb), bomb, '0.3'));
     expect(deepRes.status).toBe(400);
     expect((await deepRes.json()).error).toBe('invalid_body');
+  });
+
+  // F5b: the cap is enforced while streaming, so an omitted or spoofed
+  // Content-Length cannot make the unauthenticated route buffer unbounded data.
+  it('bounds the body stream when Content-Length is missing or spoofed', async () => {
+    const chunk = new Uint8Array(64 * 1024);
+    let pulled = 0; // 8 chunks = 512 KiB, no honest length
+    const stream = new ReadableStream({
+      pull(c) {
+        pulled++;
+        c.enqueue(chunk);
+        if (pulled === 8) c.close();
+      }
+    });
+    const res = await POST(
+      new Request('https://movehome.org/api/a2a/push-receiver', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'a2a-version': '0.3',
+          'x-a2a-signature': await sign(TASK_03),
+          'content-length': '10'
+        },
+        body: stream,
+        duplex: 'half'
+      } as RequestInit)
+    );
+    expect(res.status).toBe(413);
+    expect((await res.json()).error).toBe('body_too_large');
+    // the reader must stop at the cap, not drain the stream into memory
+    expect(pulled).toBeLessThan(8);
+  });
+
+  // F3b: bytes, not a lossy decode, are verified. U+FFFD in the signed body is
+  // EF BF BD on the wire; replacing one byte with 0xFF decodes to the same
+  // string, so only a raw-byte check (strict UTF-8 + byte equality) rejects it.
+  it('rejects invalid UTF-8 bytes instead of lossily decoding them to the signed text', async () => {
+    const body = { ...TASK_03, note: '\uFFFD' };
+    const canonical = canonicalize(body as Record<string, unknown>)!;
+    const signed = new TextEncoder().encode(canonical);
+    const at = signed.indexOf(0xef); // the 3-byte EF BF BD encoding of U+FFFD
+    const mutated = Uint8Array.from([...signed.subarray(0, at), 0xff, ...signed.subarray(at + 3)]);
+
+    expect(mutated.length).toBe(signed.length - 2);
+    expect(new TextDecoder().decode(mutated)).toBe(canonical); // lossy decode hides it
+    expect(() => new TextDecoder('utf-8', { fatal: true }).decode(mutated)).toThrow();
+
+    const res = await POST(post(await sign(body), mutated, '0.3'));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe('invalid_body');
+
+    // control: the exact signed bytes still pass
+    expect((await POST(post(await sign(body), signed, '0.3'))).status).toBe(200);
   });
 
   // F6: an ambiguous kid in the trusted JWKS fails closed instead of picking one.
