@@ -9,7 +9,7 @@
 
 import canonicalize from 'canonicalize';
 import { importJWK, FlattenedSign } from 'jose';
-import type { AgentCard, AgentCardSignature } from './types';
+import type { AgentCardSignature } from './types';
 
 const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL || 'https://movehome.org').replace(/\/$/, '');
 const KID = process.env.A2A_CARD_SIGNING_KID || 'movehome-a2a-1';
@@ -30,23 +30,26 @@ function privateJwk(): Jwk | null {
 }
 
 // JCS-canonical bytes of the card with `signatures` excluded (spec requirement).
-function canonicalPayload(card: AgentCard): Uint8Array {
-  const { signatures: _drop, ...unsigned } = card as AgentCard & { signatures?: unknown };
+function canonicalPayload(card: object): Uint8Array {
+  const { signatures: _drop, ...unsigned } = card as { signatures?: unknown };
   const jcs = canonicalize(unsigned);
   if (jcs === undefined) throw new Error('card canonicalization produced no output');
   return new TextEncoder().encode(jcs);
 }
 
-let cached: Promise<AgentCard> | null = null;
+type Signed<T> = T & { signatures?: AgentCardSignature[] };
 
 // Returns the card with a `signatures` array attached, or the card unchanged when
 // no signing key is configured (a valid state for a public, no-auth agent).
-export function signAgentCard(card: AgentCard): Promise<AgentCard> {
-  if (!cached) cached = computeSignedCard(card);
-  return cached;
+// No per-card cache: the directory serves several cards and an ES256 sign over a
+// few KB is cheaper than getting cache-keying wrong.
+export function signCard<T extends object>(card: T): Promise<Signed<T>> {
+  return computeSignedCard(card);
 }
 
-async function computeSignedCard(card: AgentCard): Promise<AgentCard> {
+export const signAgentCard = signCard;
+
+async function computeSignedCard<T extends object>(card: T): Promise<Signed<T>> {
   const jwk = privateJwk();
   if (!jwk) return card;
   try {
