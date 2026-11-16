@@ -1,14 +1,27 @@
 // GET /api/tts?raia_id=…&lang=en-GB&gender=female — narrates the listing's
-// description through Google Cloud TTS and stores the MP3 once in Supabase
-// Storage, keyed by the script hash, so a changed price or CTA makes a new file.
+// description through ElevenLabs TTS (flash v2.5, multilingual v2 for Thai) and
+// stores the MP3 once in Supabase Storage, keyed by script/voice/model hash, so
+// a changed price or CTA makes a new file.
 // Without a key the client falls back to speechSynthesis, so a 503 here is normal.
 
+import { createHash } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { getListingByRaiaId } from '@/lib/queries';
 import { buildPropertyDescriptionWithCta } from '@/lib/property-card';
 import { getEstateAgentProfile } from '@/lib/agent-directory';
 import { createSupabaseAdminClient } from '@/lib/supabase-admin';
-import { cachePath, resolveLang, scriptHash, voiceFor, type TtsLang, type VoiceGender } from '@/lib/tts';
+import {
+  LOCK_TTL_MS,
+  cacheDir,
+  cachePath,
+  leasePath,
+  modelFor,
+  resolveLang,
+  scriptHash,
+  voiceFor,
+  type TtsLang,
+  type VoiceGender
+} from '@/lib/tts';
 import type { Listing } from '@/lib/types';
 
 const RAIA_ID_RE = /^prop-[a-z]{2}-[a-z0-9-]{2,32}-[0-9]{4,}$/;
@@ -20,32 +33,48 @@ const BUCKET = 'tts-audio';
 const CACHE_CONTROL = 'no-store';
 const MISS_LIMIT = 10; // billable syntheses per client per minute
 const MISS_WINDOW_MS = 60_000;
-const LOCK_TTL_MS = 30_000; // covers the 8s provider call plus the write
+// An object younger than this may be the version a concurrent request is
+// serving right now, so cleanup leaves it to a later pass.
+const PRUNE_GRACE_MS = 5 * 60_000;
 const LOCK_WAIT_MS = 5_000;
 const LOCK_POLL_MS = 150;
 
 type Store = ReturnType<typeof createSupabaseAdminClient>;
 type BucketApi = ReturnType<Store['storage']['from']>;
-type Claim = 'claimed' | 'busy' | 'local';
+type Claim = { state: 'claimed' | 'busy' | 'local'; key: string };
 
-// shortcut: per-instance memory cache stays as the no-Storage fallback; the
-// bucket is the shared copy once provisioned.
+// Per-instance memory cache for downloaded/synthesised audio buffers
 const cache = new Map<string, ArrayBuffer>();
-// Synthesised on this instance but the shared write failed — retry it later.
-const pendingWrite = new Set<string>();
-// Claims are lease objects so instances agree on who is working; without
-// Storage only this instance can be coordinated.
+// Synthesised audio retained in memory between a failed Storage write and the
+// next request. Storage is the durable copy: a restart loses this and costs one
+// re-synthesis, so the buffer is capped instead of trusted.
+const MAX_PENDING_WRITES = 32;
+const pendingWriteMap = new Map<string, ArrayBuffer>();
+
+// Local locks & miss budget fallback used strictly when Supabase Storage is unavailable
 const localClaims = new Map<string, { owner: string; expiresAt: number }>();
-// Local miss counter, used only while Storage is unavailable: an outage must
-// neither bypass nor invent the per-client billable limit.
 const localMiss = new Map<string, { window: number; count: number }>();
 
 function setCache(key: string, value: ArrayBuffer) {
   if (cache.size >= MAX_CACHE_ENTRIES) {
     const firstKey = cache.keys().next().value;
-    if (firstKey !== undefined) cache.delete(firstKey);
+    if (firstKey !== undefined && !pendingWriteMap.has(firstKey)) cache.delete(firstKey);
   }
   cache.set(key, value);
+}
+
+// Both maps are bounded: evicting a pending buffer must also drop its cached
+// copy, or a later hit would serve audio that is still not in Storage and never
+// retry the write.
+function setPending(path: string, audio: ArrayBuffer) {
+  if (pendingWriteMap.size >= MAX_PENDING_WRITES) {
+    const oldest = pendingWriteMap.keys().next().value;
+    if (oldest !== undefined) {
+      pendingWriteMap.delete(oldest);
+      cache.delete(oldest);
+    }
+  }
+  pendingWriteMap.set(path, audio);
 }
 
 // Storage is best-effort: a missing bucket logs and falls through to the
@@ -62,9 +91,15 @@ function bucketOf(store: Store): BucketApi {
   return store.storage.from(BUCKET);
 }
 
+// Only a header our own edge sets can name the peer. x-forwarded-for is
+// client-writable (Vercel appends to whatever the caller sent), so trusting it
+// is a rate-limit bypass; unidentifiable clients share one conservative bucket.
 function clientIp(request: Request): string {
-  const forwarded = request.headers.get('x-forwarded-for');
-  return forwarded?.split(',')[0].trim() || request.headers.get('x-real-ip') || 'unknown';
+  if (process.env.TRUST_PROXY === 'true') {
+    const real = request.headers.get('x-real-ip')?.trim();
+    if (real) return real;
+  }
+  return 'unknown';
 }
 
 function json(data: unknown, status = 200, headers?: Record<string, string>) {
@@ -101,56 +136,69 @@ async function readLease(
   }
 }
 
-// Own `key` until the lease expires. A Storage outage falls back to this
-// instance's lease instead of bypassing the lock for every request.
-async function claim(key: string, store: Store | null, ttlMs: number, owner: string): Promise<Claim> {
+async function claim(
+  lang: TtsLang,
+  gender: VoiceGender,
+  raia_id: string,
+  hash: string,
+  store: Store | null,
+  ttlMs: number,
+  owner: string
+): Promise<Claim> {
   const now = Date.now();
+  const key = leasePath(lang, gender, raia_id, hash);
   if (store) {
-    const payload = leaseBlob(owner, now + ttlMs);
-    const opts = { contentType: 'application/json' };
     try {
-      const res = await bucketOf(store).upload(key, payload, { ...opts, upsert: false });
-      if (!res.error) return 'claimed';
-      if (isAlreadyExistsError(res.error)) {
+      const res = await bucketOf(store).upload(key, leaseBlob(owner, now + ttlMs), {
+        contentType: 'application/json',
+        upsert: false
+      });
+      if (!res.error) return { state: 'claimed', key };
+      if (!isAlreadyExistsError(res.error)) {
+        console.error('[tts] claim storage upload error, falling back to local:', res.error);
+      } else {
         const held = await readLease(store, key);
-        if (held?.expiresAt && held.expiresAt < now) {
-          // Takeover with a fresh owner-tagged key to guarantee atomic acquisition.
-          const takeoverKey = `${key}.${owner}`;
-          const tRes = await bucketOf(store).upload(takeoverKey, payload, { ...opts, upsert: false });
-          if (!tRes.error || isAlreadyExistsError(tRes.error)) {
-            // Delete original lock file so successors see takeover.
-            await bucketOf(store).remove([key]).catch(() => {});
-            return 'claimed';
-          }
-        }
-        return 'busy';
+        // The upload said the key exists, so a null read is a transport
+        // failure, not an absent lease: never delete a lock we cannot read.
+        if (!held) return { state: 'busy', key: '' };
+        if (held.expiresAt && held.expiresAt > now) return { state: 'busy', key: '' };
+        // Expired: remove and re-create. The re-create is still create-if-absent,
+        // so only one of several takers can win; the loser sees 'exists' and
+        // waits instead of paying for a second synthesis.
+        await bucketOf(store).remove([key]);
+        const retry = await bucketOf(store).upload(key, leaseBlob(owner, now + ttlMs), {
+          contentType: 'application/json',
+          upsert: false
+        });
+        if (!retry.error) return { state: 'claimed', key };
+        if (isAlreadyExistsError(retry.error)) return { state: 'busy', key: '' };
+        console.error('[tts] claim takeover error, falling back to local:', retry.error);
       }
-      console.error('[tts] claim storage upload error, falling back to local:', res.error);
     } catch (err) {
       console.error('[tts] claim storage exception, falling back to local:', err);
     }
   }
 
   const held = localClaims.get(key);
-  if (held && held.expiresAt > now) return 'busy';
+  if (held && held.expiresAt > now) return { state: 'busy', key: '' };
   if (localClaims.size > 5_000) {
     for (const [k, v] of localClaims) if (v.expiresAt <= now) localClaims.delete(k);
   }
   localClaims.set(key, { owner, expiresAt: now + ttlMs });
-  return 'local';
+  return { state: 'local', key };
 }
 
+// `store` is passed only when the Storage lease is known to be ours: after an
+// ambiguous transport failure the key may belong to a competitor. Even then the
+// blob's owner must match, so an expired owner can never delete a successor's
+// live lease.
 async function release(key: string, store: Store | null, owner: string) {
   if (localClaims.get(key)?.owner === owner) localClaims.delete(key);
   if (!store) return;
   try {
-    const takeoverKey = `${key}.${owner}`;
-    // Remove both primary lock and any takeover lock owned by this owner.
     const held = await readLease(store, key);
-    const toRemove: string[] = [];
-    if (held?.owner === owner) toRemove.push(key);
-    toRemove.push(takeoverKey);
-    await bucketOf(store).remove(toRemove);
+    if (held?.owner !== owner) return;
+    await bucketOf(store).remove([key]);
   } catch (err) {
     console.error('[tts] claim release failed:', err);
   }
@@ -178,7 +226,9 @@ async function dropPrefix(prefix: string, store: Store) {
   }
 }
 
-function withinLocalBudget(ip: string): boolean {
+// Counts one billable miss against this instance. Only called when the shared
+// marker could not be written, so a healthy Storage path never inflates it.
+function consumeLocalBudget(ip: string): boolean {
   const window = Math.floor(Date.now() / MISS_WINDOW_MS);
   const seen = localMiss.get(ip);
   const count = seen && seen.window === window ? seen.count : 0;
@@ -190,21 +240,34 @@ function withinLocalBudget(ip: string): boolean {
   return true;
 }
 
-// Shared abuse control: at most MISS_LIMIT billable misses per client per
-// minute, agreed across instances through create-if-absent slot markers.
+// Storage markers are per client per minute, named by a hash so the bucket
+// never holds an IP address. A marker we can neither write nor confirm is a
+// transport failure, not a denial: fall back to the per-instance counter so an
+// outage neither 429s a legitimate client nor lets it synthesise unmetered.
+// shortcut: the fallback is per instance, so N instances can each spend one
+// window's budget during an outage; move to a Postgres counter when that
+// ceiling matters.
 async function withinMissBudget(ip: string, store: Store | null): Promise<boolean> {
-  if (!store) return withinLocalBudget(ip);
+  if (!store) return consumeLocalBudget(ip);
   const window = Math.floor(Date.now() / MISS_WINDOW_MS);
-  const dir = `tts/_budget/${ip}/${window}`;
+  const client = createHash('sha256').update(ip).digest('hex').slice(0, 16);
+  const dir = `tts/_budget/${client}/${window}`;
   for (let slot = 0; slot < MISS_LIMIT; slot++) {
-    const res = await claim(`${dir}/${slot}`, store, MISS_WINDOW_MS, `budget-${ip}-${window}`);
-    if (res === 'claimed') {
-      void dropPrefix(`tts/_budget/${ip}/${window - 1}`, store);
-      return true;
+    const slotKey = `${dir}/${slot}`;
+    const payload = leaseBlob(`budget-${client}-${window}`, Date.now() + MISS_WINDOW_MS);
+    try {
+      const res = await bucketOf(store).upload(slotKey, payload, { contentType: 'application/json', upsert: false });
+      if (!res.error) {
+        dropPrefix(`tts/_budget/${client}/${window - 1}`, store);
+        dropPrefix(`tts/_budget/${client}/${window - 2}`, store);
+        return true;
+      }
+      // A taken slot means the shared limit is still being counted; any other
+      // error is a transport failure and must not become a false 429.
+      if (!isAlreadyExistsError(res.error)) return consumeLocalBudget(ip);
+    } catch {
+      return consumeLocalBudget(ip);
     }
-    // Storage transport failure: count locally rather than 429-ing or letting
-    // the request through unmetered.
-    if (res === 'local') return withinLocalBudget(ip);
   }
   return false;
 }
@@ -230,30 +293,34 @@ async function synthesize(
 ): Promise<ArrayBuffer> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 8000);
+  const voiceId = voiceFor(lang, gender);
+  const modelId = modelFor(lang);
   try {
     const res = await fetch(
-      `https://texttospeech.googleapis.com/v1/text:synthesize?key=${apiKey}`,
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'xi-api-key': apiKey
+        },
         body: JSON.stringify({
-          input: { text: script },
-          voice: { languageCode: lang, name: voiceFor(lang, gender) },
-          audioConfig: { audioEncoding: 'MP3' }
+          text: script,
+          model_id: modelId,
+          // v3 needs the language hint for Thai; other models infer it.
+          ...(lang === 'th-TH' ? { language_code: 'th' } : {})
         }),
         signal: controller.signal
       }
     );
     if (!res.ok) {
-      console.error('[tts] google', res.status, await res.text().catch(() => ''));
+      console.error('[tts] elevenlabs', res.status, await res.text().catch(() => ''));
       throw new UpstreamError(502, 'TTS upstream failed');
     }
-    const body = (await res.json()) as { audioContent?: string };
-    if (!body.audioContent) throw new UpstreamError(502, 'TTS upstream returned no audio');
-    return Uint8Array.from(atob(body.audioContent), (c) => c.charCodeAt(0)).buffer;
+    return await res.arrayBuffer();
   } catch (err) {
     if (err instanceof UpstreamError) throw err;
-    console.error('[tts] google fetch failed or timed out:', err);
+    console.error('[tts] elevenlabs fetch failed or timed out:', err);
     throw new UpstreamError(504, 'TTS upstream timeout or failure');
   } finally {
     clearTimeout(timeoutId);
@@ -279,11 +346,9 @@ async function persist(
   audio: ArrayBuffer,
   store: Store | null
 ) {
-  if (!store) {
-    // Storage not initialised yet: keep the audio and upload it once it is.
-    pendingWrite.add(path);
-    return;
-  }
+  setPending(path, audio);
+  setCache(path, audio);
+  if (!store) return;
   try {
     const up = await bucketOf(store).upload(path, new Blob([audio], { type: 'audio/mpeg' }), {
       contentType: 'audio/mpeg',
@@ -291,19 +356,38 @@ async function persist(
       upsert: true
     });
     if (up.error) throw new Error(up.error.message);
-    pendingWrite.delete(path);
+    pendingWriteMap.delete(path);
   } catch (err) {
-    // Keep the audio for this instance and retry the shared write next time.
     console.error('[tts] storage write failed (retrying on a later request):', err);
-    pendingWrite.add(path);
     return;
   }
   await prune(raia_id, lang, gender, path, store);
 }
 
-// One file per (listing, locale, voice). Delete only hashes that are neither
-// the listing's *current* script nor the file just written, so an older
-// in-flight version can never remove the audio a newer one serves.
+async function retryPendingWrites(store: Store | null) {
+  if (!store || pendingWriteMap.size === 0) return;
+  for (const [path, audio] of Array.from(pendingWriteMap.entries())) {
+    try {
+      const up = await bucketOf(store).upload(path, new Blob([audio], { type: 'audio/mpeg' }), {
+        contentType: 'audio/mpeg',
+        cacheControl: '604800',
+        upsert: true
+      });
+      if (!up.error) {
+        pendingWriteMap.delete(path);
+      }
+    } catch {
+      // Retained in pendingWriteMap for future retries
+    }
+  }
+}
+
+// One file per (listing, locale, voice). Delete only objects that are neither
+// the listing's *current* script nor the file just written, and that had been
+// sitting untouched for PRUNE_GRACE_MS. The listing is re-read after the object
+// list and again before the delete, so a version published while this pass was
+// running is never removed; the grace window covers a write that lands between
+// the last read and the delete.
 async function prune(
   raia_id: string,
   lang: TtsLang,
@@ -312,17 +396,37 @@ async function prune(
   store: Store
 ) {
   try {
-    const fresh = await getListingByRaiaId(raia_id);
-    const dir = `tts/${raia_id}/${lang}/${gender}`;
+    const readAt = Date.now();
+    const dir = cacheDir(raia_id, lang, gender);
     const listed = await bucketOf(store).list(dir);
+    const fresh = await getListingByRaiaId(raia_id);
     const validPaths = new Set<string>([writtenPath]);
     if (fresh) {
       validPaths.add(cachePath(raia_id, lang, gender, scriptHash(scriptFor(fresh))));
     }
     const stale = (listed.data ?? [])
-      .map((e) => `${dir}/${e.name}`)
-      .filter((p) => p.endsWith('.mp3') && !validPaths.has(p));
-    if (stale.length) await bucketOf(store).remove(stale);
+      .filter((e) => e.name.endsWith('.mp3'))
+      .map((e) => ({ path: `${dir}/${e.name}`, at: Date.parse(e.updated_at ?? '') }))
+      // Unknown age is not proof of staleness.
+      .filter(
+        (f) =>
+          !validPaths.has(f.path) &&
+          Number.isFinite(f.at) &&
+          f.at < readAt &&
+          f.at < readAt - PRUNE_GRACE_MS
+      )
+      .map((f) => f.path);
+    if (!stale.length) return;
+    // A newer version may have been published after the first read: re-check
+    // the current path immediately before deleting.
+    const latest = await getListingByRaiaId(raia_id);
+    if (latest) {
+      const current = cachePath(raia_id, lang, gender, scriptHash(scriptFor(latest)));
+      const keep = stale.filter((p) => p !== current);
+      if (keep.length) await bucketOf(store).remove(keep);
+    } else {
+      await bucketOf(store).remove(stale);
+    }
   } catch (err) {
     console.error('[tts] stale cleanup skipped:', err);
   }
@@ -367,16 +471,22 @@ export async function GET(request: Request) {
   const path = cachePath(raia_id, lang, gender, hash);
   const store = storage();
 
-  let audio: ArrayBuffer | null = cache.get(path) ?? null;
+  if (store && pendingWriteMap.size > 0) {
+    void retryPendingWrites(store);
+  }
+
+  let audio: ArrayBuffer | null = cache.get(path) ?? pendingWriteMap.get(path) ?? null;
   if (audio) {
-    if (pendingWrite.has(path)) await persist(raia_id, lang, gender, path, audio, store);
+    if (pendingWriteMap.has(path)) await persist(raia_id, lang, gender, path, audio, store);
   } else {
     audio = await download(path, store);
     if (audio) setCache(path, audio);
   }
 
   if (!audio) {
-    const apiKey = process.env.GOOGLE_TTS_API_KEY || process.env.GEMINI_API_KEY;
+    // Never fall back to another provider's credential: an invalid xi-api-key
+    // is a billable 401 round trip and an opaque 502 to the client.
+    const apiKey = process.env.ELEVENLABS_API_KEY;
     if (!apiKey) {
       return json({ error: 'TTS not configured' }, 503);
     }
@@ -388,16 +498,17 @@ export async function GET(request: Request) {
       );
     }
 
-    const lock = `tts/_locks/${lang}/${gender}/${raia_id}-${hash}`;
     const owner = leaseOwner();
-    let held = false;
+    let claimState: Claim['state'] = 'busy';
+    let lock = '';
     try {
-      held = (await claim(lock, store, LOCK_TTL_MS, owner)) !== 'busy';
-      if (held) {
+      const lease = await claim(lang, gender, raia_id, hash, store, LOCK_TTL_MS, owner);
+      claimState = lease.state;
+      lock = lease.key;
+      if (claimState !== 'busy') {
         audio = cache.get(path) ?? (await download(path, store));
         if (!audio) {
           audio = await synthesize(apiKey, script, lang, gender);
-          setCache(path, audio);
           await persist(raia_id, lang, gender, path, audio, store);
         }
       } else {
@@ -416,7 +527,9 @@ export async function GET(request: Request) {
       }
       throw err;
     } finally {
-      if (held) await release(lock, store, owner);
+      if (claimState !== 'busy' && lock) {
+        await release(lock, claimState === 'claimed' ? store : null, owner);
+      }
     }
   }
 

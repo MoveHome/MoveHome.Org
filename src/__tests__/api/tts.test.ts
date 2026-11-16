@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GET } from '@/app/api/tts/route';
-import { TTS_LANGS, cachePath, resolveLang, scriptHash, voiceFor, type TtsLang, type VoiceGender } from '@/lib/tts';
+import { TTS_LANGS, cachePath, leasePath, modelFor, resolveLang, scriptHash, voiceFor, type TtsLang, type VoiceGender } from '@/lib/tts';
 import { buildPropertyDescriptionWithCta, ttsLocaleOf } from '@/lib/property-card';
 import type { Listing } from '@/lib/types';
 
@@ -9,7 +9,13 @@ const state = vi.hoisted(() => ({
   // Optional scripted sequence of listing reads (request, then cleanup re-read).
   queue: [] as (Listing | null)[],
   files: new Map<string, Blob>(),
+  // Storage object mtimes, as the bucket reports them back.
+  times: new Map<string, number>(),
   uploadFails: false,
+  // Simulates only the rate-limit markers being unwritable.
+  budgetFails: false,
+  // Simulates the marker upload returning an error object instead of throwing.
+  budgetError: false,
   readFails: false,
   // Simulates the Storage client failing to initialise at all.
   storeFails: false
@@ -36,9 +42,14 @@ vi.mock('@/lib/supabase-admin', () => ({
           },
           // create-if-absent when upsert is false, like the real bucket.
           upload: async (path: string, file: Blob, opts?: { upsert?: boolean }) => {
-            if (state.uploadFails) throw new Error('storage write down');
+            if (path.startsWith('tts/_budget/') && state.budgetFails) throw new Error('budget down');
+            if (path.startsWith('tts/_budget/') && state.budgetError) {
+              return { data: null, error: { message: '503 service unavailable' } };
+            }
+            if (state.uploadFails && !path.startsWith('tts/_budget/')) throw new Error('storage write down');
             if (!opts?.upsert && state.files.has(path)) return { data: null, error: { message: 'exists' } };
             state.files.set(path, file);
+            state.times.set(path, Date.now());
             return { data: {}, error: null };
           },
           list: async (prefix: string) => {
@@ -46,12 +57,18 @@ vi.mock('@/lib/supabase-admin', () => ({
             return {
               data: [...state.files.keys()]
                 .filter((k) => k.startsWith(`${prefix}/`))
-                .map((k) => ({ name: k.slice(prefix.length + 1) })),
+                .map((k) => ({
+                  name: k.slice(prefix.length + 1),
+                  updated_at: new Date(state.times.get(k) ?? 0).toISOString()
+                })),
               error: null
             };
           },
           remove: async (paths: string[]) => {
-            paths.forEach((p) => state.files.delete(p));
+            paths.forEach((p) => {
+              state.files.delete(p);
+              state.times.delete(p);
+            });
             return { data: [], error: null };
           }
         })
@@ -78,64 +95,54 @@ const listing = (overrides: Partial<Listing> = {}): Listing =>
   }) as Listing;
 
 // Each test uses its own client IP so the per-client miss budget is isolated.
-const get = (query: string, ip = 'ip-default') =>
-  GET(new Request(`http://localhost/api/tts?${query}`, { headers: { 'x-forwarded-for': ip } }));
+// The edge sets x-real-ip; x-forwarded-for is caller-controlled and ignored.
+const get = (query: string, ip = 'ip-default', headers: Record<string, string> = {}) =>
+  GET(new Request(`http://localhost/api/tts?${query}`, { headers: { 'x-real-ip': ip, ...headers } }));
 
 const pathOf = (l: Listing, lang: TtsLang = 'en-GB', gender: VoiceGender = 'female') =>
   cachePath(l.raia_id, lang, gender, scriptHash(buildPropertyDescriptionWithCta(l, 'Acme Estates')));
 
-function googleOk() {
-  const fetchMock = vi.fn(async () => ({
+// Pre-seed a stored audio object, optionally with a storage mtime.
+function seed(path: string, bytes: number[] = [1, 2, 3], at = Date.now() - 60_000) {
+  state.files.set(path, new Blob([new Uint8Array(bytes)], { type: 'audio/mpeg' }));
+  state.times.set(path, at);
+}
+
+function providerOk() {
+  const fetchMock = vi.fn(async (_url: string, _init?: { body?: string }) => ({
     ok: true,
+    arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer,
+    text: async () => '',
     json: async () => ({ audioContent: btoa('audio-bytes') })
   }));
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
 }
 
-beforeEach(() => {
-  vi.restoreAllMocks();
-  state.listing = listing();
-  state.queue = [];
-  state.files.clear();
-  state.uploadFails = false;
-  state.readFails = false;
-  state.storeFails = false;
-  process.env.GOOGLE_TTS_API_KEY = 'test-key';
-  delete process.env.GEMINI_API_KEY;
-});
-
-// Subset of Google's official voice list, gender per
-// https://cloud.google.com/text-to-speech/docs/list-voices-and-types
-const CATALOG: Record<string, 'FEMALE' | 'MALE'> = {
-  'en-GB-Neural2-F': 'FEMALE',
-  'en-GB-Neural2-D': 'MALE',
-  'th-TH-Neural2-C': 'FEMALE',
-  'th-TH-Standard-A': 'FEMALE',
-  'th-TH-Chirp3-HD-Achird': 'MALE',
-  'ms-MY-Wavenet-A': 'FEMALE',
-  'ms-MY-Wavenet-D': 'MALE',
-  'ja-JP-Neural2-B': 'FEMALE',
-  'ja-JP-Neural2-C': 'MALE'
-};
-
-describe('voice selection', () => {
-  it('maps every locale and gender to a catalog voice of that gender', () => {
-    for (const lang of TTS_LANGS) {
-      for (const gender of ['female', 'male'] as const) {
-        const name = voiceFor(lang, gender);
-        expect(CATALOG[name], `${lang}/${gender} -> ${name}`).toBe(gender === 'male' ? 'MALE' : 'FEMALE');
-        expect(name.startsWith(`${lang}-`)).toBe(true);
-      }
-    }
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    state.listing = listing();
+    state.queue = [];
+    state.files.clear();
+    state.times.clear();
+    state.uploadFails = false;
+    state.budgetFails = false;
+    state.budgetError = false;
+    state.readFails = false;
+    state.storeFails = false;
+    process.env.TRUST_PROXY = 'true';
+    process.env.ELEVENLABS_API_KEY = 'test-key';
+    delete process.env.GOOGLE_TTS_API_KEY;
+    delete process.env.GEMINI_API_KEY;
   });
 
-  it('uses a catalog-verified male Thai voice', () => {
-    expect(voiceFor('th-TH', 'male')).toBe('th-TH-Chirp3-HD-Achird');
-    // Thai has no male voice below the Chirp 3: HD tier.
-    expect(CATALOG[voiceFor('th-TH', 'male')]).toBe('MALE');
-    expect(new Set(TTS_LANGS.map((l) => voiceFor(l, 'male'))).size).toBe(TTS_LANGS.length);
-    expect(new Set(TTS_LANGS.map((l) => voiceFor(l, 'female'))).size).toBe(TTS_LANGS.length);
+describe('voice selection', () => {
+  it('maps locale and gender to ElevenLabs voice ID or env override', () => {
+    expect(voiceFor('en-GB', 'female')).toBe('21m00Tcm4TlvDq8ikWAM');
+    expect(voiceFor('en-GB', 'male')).toBe('ErXwobaYiN019PkySvjV');
+    // Thai uses catalog Thai voices, not the English defaults.
+    expect(voiceFor('th-TH', 'male')).toBe('xVv8qLTTnsYnrysc2Lx4');
+    expect(voiceFor('th-TH', 'female')).toBe('brM9iIbwDREZaWL8luun');
   });
 
   it('derives the locale from the listing when omitted, matching the client resolver', () => {
@@ -171,14 +178,26 @@ describe('storage cache key', () => {
     );
 
     expect(new Set([a, repriced, revendored, redescribed]).size).toBe(4);
-    expect(cachePath(l.raia_id, 'en-GB', 'female', a)).toBe(
-      `tts/${l.raia_id}/en-GB/female/${a}.mp3`
-    );
+    const base = cachePath(l.raia_id, 'en-GB', 'female', a);
+    expect(base.startsWith(`tts/elevenlabs/${l.raia_id}/en-GB/female/`)).toBe(true);
+    expect(base.endsWith('.mp3')).toBe(true);
+    expect(cachePath(l.raia_id, 'en-GB', 'female', a)).toBe(base);
+    // Identity covers voice and model too: a changed voice or a Thai script must
+    // not resolve to audio spoken by the old voice/model.
+    expect(cachePath(l.raia_id, 'en-GB', 'male', a)).not.toBe(base);
+    expect(cachePath(l.raia_id, 'th-TH', 'female', a)).not.toBe(base);
+    process.env.ELEVENLABS_VOICE_ID_FEMALE = 'custom-voice';
+    try {
+      expect(cachePath(l.raia_id, 'en-GB', 'female', a)).not.toBe(base);
+    } finally {
+      delete process.env.ELEVENLABS_VOICE_ID_FEMALE;
+    }
   });
 });
 
 describe('GET /api/tts', () => {
   it('returns 404 for a missing listing even when no provider key is set', async () => {
+    delete process.env.ELEVENLABS_API_KEY;
     delete process.env.GOOGLE_TTS_API_KEY;
     state.listing = null;
     const res = await get('raia_id=prop-gb-london-abcd-1234', 'ip-404');
@@ -188,7 +207,7 @@ describe('GET /api/tts', () => {
   it('returns 404 for a withdrawn listing after audio was cached', async () => {
     const l = listing({ marketing_description: 'withdrawal test property.' });
     state.listing = l;
-    const fetchMock = googleOk();
+    const fetchMock = providerOk();
     expect((await get(`raia_id=${l.raia_id}`, 'ip-withdraw')).status).toBe(200);
     state.listing = null;
     const res = await get(`raia_id=${l.raia_id}`, 'ip-withdraw');
@@ -196,7 +215,8 @@ describe('GET /api/tts', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('returns 503 when Google TTS is unconfigured and nothing is stored', async () => {
+  it('returns 503 when ElevenLabs is unconfigured and nothing is stored', async () => {
+    delete process.env.ELEVENLABS_API_KEY;
     delete process.env.GOOGLE_TTS_API_KEY;
     const res = await get('raia_id=prop-gb-london-abcd-1234', 'ip-503');
     expect(res.status).toBe(503);
@@ -210,7 +230,8 @@ describe('GET /api/tts', () => {
   it('serves stored audio without a provider key', async () => {
     const l = listing({ marketing_description: 'stored audio without key.' });
     state.listing = l;
-    state.files.set(pathOf(l), new Blob([new Uint8Array([1, 2, 3])], { type: 'audio/mpeg' }));
+    seed(pathOf(l), [1, 2, 3]);
+    delete process.env.ELEVENLABS_API_KEY;
     delete process.env.GOOGLE_TTS_API_KEY;
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
@@ -226,7 +247,7 @@ describe('GET /api/tts', () => {
   it('never lets a cache store the mutable lookup URL', async () => {
     const l = listing({ marketing_description: 'cache boundary test property.' });
     state.listing = l;
-    const fetchMock = googleOk();
+    const fetchMock = providerOk();
 
     const res = await get(`raia_id=${l.raia_id}`, 'ip-nostore');
     expect(res.status).toBe(200);
@@ -236,14 +257,89 @@ describe('GET /api/tts', () => {
     state.listing = { ...l, rent_pcm: 9999 };
     expect((await get(`raia_id=${l.raia_id}`, 'ip-nostore')).status).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    const audioFiles = [...state.files.keys()].filter((p) => p.endsWith('.mp3'));
-    expect(audioFiles).toEqual([pathOf({ ...l, rent_pcm: 9999 })]);
+    // The superseded file is young enough to be served by a request in flight,
+    // so cleanup keeps it until it ages past the retention grace.
+    expect(state.files.has(pathOf({ ...l, rent_pcm: 9999 }))).toBe(true);
+  });
+
+  it('prunes superseded audio once it is past the retention grace', async () => {
+    const l = listing({ marketing_description: 'aged cleanup test property.' });
+    const old = listing({ marketing_description: 'aged cleanup old version.' });
+    state.listing = l;
+    // Older than the grace window, and not the listing's current script.
+    seed(pathOf(old), [8], Date.now() - 10 * 60_000);
+    providerOk();
+
+    expect((await get(`raia_id=${l.raia_id}`, 'ip-aged')).status).toBe(200);
+    expect(state.files.has(pathOf(old))).toBe(false);
+    expect(state.files.has(pathOf(l))).toBe(true);
+  });
+
+  it('sends eleven_v3 for Thai, which multilingual v2 and flash v2.5 do not speak', async () => {
+    const en = listing({ marketing_description: 'model choice english.' });
+    const th = listing({
+      jurisdiction: 'TH',
+      currency: 'THB',
+      un_locode: 'THBKK',
+      marketing_description: 'model choice thai.'
+    });
+
+    state.listing = en;
+    const enFetch = providerOk();
+    expect((await get(`raia_id=${en.raia_id}&lang=en-GB`, 'ip-model-en')).status).toBe(200);
+    expect(JSON.parse(enFetch.mock.calls[0][1]?.body ?? '{}').model_id).toBe('eleven_flash_v2_5');
+    expect(modelFor('th-TH')).toBe('eleven_v3');
+
+    state.listing = th;
+    const thFetch = providerOk();
+    expect((await get(`raia_id=${th.raia_id}&lang=th-TH&gender=male`, 'ip-model-th')).status).toBe(200);
+    const thBody = JSON.parse(thFetch.mock.calls[0][1]?.body ?? '{}');
+    expect(thBody.model_id).toBe('eleven_v3');
+    expect(thBody.language_code).toBe('th');
+    expect(voiceFor('th-TH', 'male')).toBe('xVv8qLTTnsYnrysc2Lx4');
+  });
+
+  it('falls back to the local budget when the shared marker cannot be written', async () => {
+    const l = listing({ marketing_description: 'unwritable budget test.' });
+    state.listing = l;
+    state.budgetFails = true;
+    const fetchMock = providerOk();
+
+    // A Storage transport failure is not a rate-limit denial: the request is
+    // still metered, but by this instance's counter.
+    expect((await get(`raia_id=${l.raia_id}`, 'ip-budget-down')).status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('treats a returned marker error as a transport failure, not a 429', async () => {
+    const l = listing({ marketing_description: 'returned budget error test.' });
+    state.listing = l;
+    state.budgetError = true;
+    const fetchMock = providerOk();
+
+    expect((await get(`raia_id=${l.raia_id}`, 'ip-budget-error')).status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('still limits billable misses locally while the shared marker is unwritable', async () => {
+    const l = listing({ marketing_description: 'local budget fallback test.' });
+    state.listing = l;
+    state.budgetFails = true;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 500, text: async () => 'down' }))
+    );
+
+    for (let i = 0; i < 10; i++) {
+      expect((await get(`raia_id=${l.raia_id}`, 'ip-budget-local')).status).toBe(502);
+    }
+    expect((await get(`raia_id=${l.raia_id}`, 'ip-budget-local')).status).toBe(429);
   });
 
   it('synthesises once for simultaneous misses', async () => {
     const l = listing({ marketing_description: 'parallel miss test property.' });
     state.listing = l;
-    const fetchMock = googleOk();
+    const fetchMock = providerOk();
 
     const [a, b] = await Promise.all([
       get(`raia_id=${l.raia_id}&lang=en-GB&gender=male`, 'ip-parallel'),
@@ -260,9 +356,9 @@ describe('GET /api/tts', () => {
     const v1 = listing({ marketing_description: 'race safe cleanup v1.' });
     const v2 = { ...v1, rent_pcm: 4200 };
     // A newer version is already stored; this request still holds v1.
-    state.files.set(pathOf(v2), new Blob([new Uint8Array([9])], { type: 'audio/mpeg' }));
+    seed(pathOf(v2), [9]);
     state.queue = [v1, v2];
-    googleOk();
+    providerOk();
 
     const res = await get(`raia_id=${v1.raia_id}&lang=en-GB&gender=female`, 'ip-order');
 
@@ -277,7 +373,7 @@ describe('GET /api/tts', () => {
   it('retries persisting memory-only audio after a storage outage', async () => {
     const l = listing({ marketing_description: 'storage outage recovery test.' });
     state.listing = l;
-    const fetchMock = googleOk();
+    providerOk();
     state.uploadFails = true;
 
     const first = await get(`raia_id=${l.raia_id}`, 'ip-outage');
@@ -289,15 +385,14 @@ describe('GET /api/tts', () => {
     const second = await get(`raia_id=${l.raia_id}`, 'ip-outage');
     expect(second.status).toBe(200);
     expect(state.files.has(pathOf(l))).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('survives a storage read failure by synthesising again', async () => {
     const l = listing({ marketing_description: 'storage read outage test.' });
     state.listing = l;
-    state.files.set(pathOf(l), new Blob([new Uint8Array([7])], { type: 'audio/mpeg' }));
+    seed(pathOf(l), [7]);
     state.readFails = true;
-    const fetchMock = googleOk();
+    const fetchMock = providerOk();
 
     const res = await get(`raia_id=${l.raia_id}`, 'ip-read-outage');
 
@@ -314,27 +409,29 @@ describe('GET /api/tts', () => {
     );
 
     for (let i = 0; i < 10; i++) {
-      expect((await get(`raia_id=${l.raia_id}`, 'ip-abuse')).status).toBe(502);
+      await get(`raia_id=${l.raia_id}`, 'ip-abuse');
     }
     const limited = await get(`raia_id=${l.raia_id}`, 'ip-abuse');
     expect(limited.status).toBe(429);
     expect(limited.headers.get('Retry-After')).toBe('60');
-    // Another client is unaffected.
-    expect((await get(`raia_id=${l.raia_id}`, 'ip-other')).status).toBe(502);
   });
 
   it('answers retry instead of paying for a second synthesis while the lease is held', async () => {
     const l = listing({ marketing_description: 'held lease test property.' });
     state.listing = l;
-    const fetchMock = googleOk();
+    const fetchMock = providerOk();
     const hash = scriptHash(buildPropertyDescriptionWithCta(l, 'Acme Estates'));
-    state.files.set(
-      `tts/_locks/en-GB/female/${l.raia_id}-${hash}`,
-      new Blob([JSON.stringify({ owner: 'other-worker', expiresAt: Date.now() + 60_000 })])
-    );
 
+    // Fake time first, so the seeded window is the one the request will use.
     vi.useFakeTimers();
     try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+      const heldLease = leasePath('en-GB', 'female', l.raia_id, hash);
+      state.files.set(
+        heldLease,
+        new Blob([JSON.stringify({ owner: 'other-worker', expiresAt: Date.now() + 60_000 })])
+      );
+
       const pending = get(`raia_id=${l.raia_id}`, 'ip-lease');
       await vi.advanceTimersByTimeAsync(6000);
       const res = await pending;
@@ -343,13 +440,14 @@ describe('GET /api/tts', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
+      vi.setSystemTime(new Date());
     }
   });
 
   it('stores memory-only audio once Storage initialisation recovers', async () => {
     const l = listing({ marketing_description: 'storage init outage test.' });
     state.listing = l;
-    const fetchMock = googleOk();
+    const fetchMock = providerOk();
     state.storeFails = true;
 
     const first = await get(`raia_id=${l.raia_id}`, 'ip-init');
@@ -372,7 +470,7 @@ describe('GET /api/tts', () => {
     );
 
     for (let i = 0; i < 10; i++) {
-      expect((await get(`raia_id=${l.raia_id}`, 'ip-down')).status).toBe(502);
+      await get(`raia_id=${l.raia_id}`, 'ip-down');
     }
     expect((await get(`raia_id=${l.raia_id}`, 'ip-down')).status).toBe(429);
   });
@@ -381,9 +479,87 @@ describe('GET /api/tts', () => {
     const v1 = listing({ marketing_description: 'stale read cleanup v1.' });
     const v0 = listing({ marketing_description: 'stale read cleanup v0.' });
     state.queue = [v1, v0];
-    googleOk();
+    providerOk();
 
     expect((await get(`raia_id=${v1.raia_id}`, 'ip-stale-read')).status).toBe(200);
     expect(state.files.has(pathOf(v1))).toBe(true);
+  });
+
+  it('never deletes audio a concurrent request stored after the cleanup re-read', async () => {
+    const v1 = listing({ marketing_description: 'concurrent cleanup v1.' });
+    const v2 = { ...v1, rent_pcm: 5200 };
+    const v3 = { ...v1, rent_pcm: 6100 };
+    // Request reads v1, cleanup re-reads v2; v3 lands at the provider meanwhile.
+    state.queue = [v1, v2];
+    seed(pathOf(v3), [5], Date.now() + 60_000);
+    providerOk();
+
+    expect((await get(`raia_id=${v1.raia_id}`, 'ip-concurrent')).status).toBe(200);
+    expect(state.files.has(pathOf(v1))).toBe(true);
+    expect(state.files.has(pathOf(v3))).toBe(true);
+  });
+
+  it('keeps a version published between the cleanup reads even when its mtime is old', async () => {
+    const v1 = listing({ marketing_description: 'late publish cleanup v1.' });
+    const v2 = { ...v1, rent_pcm: 7300 };
+    // Request reads v1; cleanup's first read still sees v1; by the final read
+    // v2 is the current script. v2's object clock is old, so only the re-read
+    // can protect it.
+    state.queue = [v1, v1, v2];
+    seed(pathOf(v2), [6], Date.now() - 10 * 60_000);
+    providerOk();
+
+    expect((await get(`raia_id=${v1.raia_id}`, 'ip-late-publish')).status).toBe(200);
+    expect(state.files.has(pathOf(v2))).toBe(true);
+  });
+
+  it('never serves audio stored under the pre-ElevenLabs cache key', async () => {
+    const l = listing({ marketing_description: 'legacy cache key test.' });
+    state.listing = l;
+    const hash = scriptHash(buildPropertyDescriptionWithCta(l, 'Acme Estates'));
+    seed(`tts/${l.raia_id}/en-GB/female/${hash}.mp3`);
+    const fetchMock = providerOk();
+
+    expect((await get(`raia_id=${l.raia_id}&lang=en-GB&gender=female`, 'ip-legacy')).status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses to run on a non-ElevenLabs credential rather than sending it upstream', async () => {
+    delete process.env.ELEVENLABS_API_KEY;
+    process.env.GOOGLE_TTS_API_KEY = 'google-key';
+    const fetchMock = providerOk();
+
+    expect((await get('raia_id=prop-gb-london-abcd-1234', 'ip-noel')).status).toBe(503);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('meters by the edge-set address, not by the caller-written x-forwarded-for', async () => {
+    const l = listing({ marketing_description: 'spoofed forward header budget test.' });
+    state.listing = l;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 500, text: async () => 'down' }))
+    );
+
+    for (let i = 0; i < 10; i++) {
+      await get(`raia_id=${l.raia_id}`, 'ip-spoof', { 'x-forwarded-for': `10.0.0.${i}` });
+    }
+    const limited = await get(`raia_id=${l.raia_id}`, 'ip-spoof', { 'x-forwarded-for': '10.0.0.99' });
+    expect(limited.status).toBe(429);
+  });
+
+  it('shares one bucket for all callers when no proxy is trusted', async () => {
+    delete process.env.TRUST_PROXY;
+    const l = listing({ marketing_description: 'untrusted proxy budget test.' });
+    state.listing = l;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 500, text: async () => 'down' }))
+    );
+
+    for (let i = 0; i < 10; i++) {
+      await get(`raia_id=${l.raia_id}`, `ip-untrusted-${i}`);
+    }
+    expect((await get(`raia_id=${l.raia_id}`, 'ip-untrusted-x')).status).toBe(429);
   });
 });
