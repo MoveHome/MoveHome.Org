@@ -1,0 +1,15 @@
+{
+  "name": "MoveHome.org — swipe property search",
+  "short_name": "MoveHome",
+  "description": "Swipe through verified rentals and sales in Bangkok and London. Your personal agent books the viewing.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0A0F0D",
+  "theme_color": "#0A0F0D",
+  "icons": [
+    { "src": "/branding/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/branding/icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
