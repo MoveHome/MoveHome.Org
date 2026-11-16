@@ -23,7 +23,7 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
     bedrooms_min: sp.bedrooms_min ? Number(sp.bedrooms_min) : undefined,
     rent_pcm_max: sp.rent_pcm_max ? Number(sp.rent_pcm_max) : undefined,
     un_locode: sp.un_locode,
-    limit: 48
+    limit: 200
   };
   const { results, total } = await searchListings(params);
   const pins = await getMapPins(params);

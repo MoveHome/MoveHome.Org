@@ -7,6 +7,6 @@ export const revalidate = 60;
 // as alias), which next.config rewrites to this route so the host root serves
 // the deck.
 export default async function WebappPage() {
-  const { results } = await searchListings({ limit: 48 });
+  const { results, total } = await searchListings({ limit: 200 });
   return <PropertyDeck listings={results} />;
 }

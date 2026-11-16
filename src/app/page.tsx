@@ -38,7 +38,7 @@ export default function HomePage() {
         </a>
         <div className="flex items-center gap-4">
           <a
-            href="/search"
+            href="/app"
             className="text-sm font-medium text-[var(--text-dim)] hover:text-[var(--accent)] transition-colors hidden sm:inline-block focus:outline-none focus:ring-2 focus:ring-[var(--accent)] rounded"
           >
             Browse Properties
@@ -97,7 +97,7 @@ export default function HomePage() {
 
           <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
             <a
-              href="/search"
+              href="/app"
               className="inline-flex items-center gap-2 px-8 py-4 rounded-xl bg-[var(--accent)] hover:bg-[var(--accent-hover)] text-white dark:text-black font-bold text-base transition-all shadow-sm shadow-[var(--accent)]/20 focus:outline-none focus:ring-2 focus:ring-[var(--accent)]"
             >
               Search Properties →
@@ -133,7 +133,7 @@ export default function HomePage() {
               </ul>
             </div>
             <a
-              href="/search"
+              href="/app"
               className="w-full py-3.5 px-6 rounded-xl border border-[var(--border-bright)] group-hover:border-[var(--accent)] hover:bg-[var(--accent)] hover:text-white dark:hover:text-black font-semibold text-sm text-center transition-all focus:outline-none focus:ring-2 focus:ring-[var(--accent)] flex items-center justify-center gap-1.5"
             >
               Start browsing

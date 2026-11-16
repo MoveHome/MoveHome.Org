@@ -156,7 +156,9 @@ export async function searchListings(
 
   let query = sb
     .from('tbl_external_raia_listings')
-    .select('*', { count: 'exact' })
+    .select('*', { count: 'exact' });
+
+  query = query
     .is('withdrawn_at', null)
     .is('duplicate_of', null)
     .eq('is_outlier', false)
@@ -177,7 +179,7 @@ export async function searchListings(
   if (params.asking_price_max !== undefined) query = query.lte('asking_price', params.asking_price_max);
   if (params.features?.length) query = query.contains('features', params.features);
 
-  const limit = params.limit ?? 24;
+  const limit = params.limit ?? 200;
   query = query.range(params.offset ?? 0, (params.offset ?? 0) + limit - 1);
 
   const { data, count, error } = await query;
@@ -196,17 +198,22 @@ export async function searchListings(
   };
 }
 
-export async function getListingByRaiaId(raia_id: string): Promise<Listing | null> {
+export async function getListingByRaiaId(raia_id: string, signal?: AbortSignal): Promise<Listing | null> {
   const sb = getSupabase();
   if (!sb) return null;
 
-  const { data, error } = await sb
+  let query = sb
     .from('tbl_external_raia_listings')
     .select('*')
     .eq('raia_id', raia_id)
     .is('withdrawn_at', null)
-    .eq('visibility', 'public')
-    .maybeSingle();
+    .eq('visibility', 'public');
+
+  if (signal) {
+    query = query.abortSignal(signal);
+  }
+
+  const { data, error } = await query.maybeSingle();
 
   if (error) {
     console.error('[getListingByRaiaId]', error.message);
@@ -222,7 +229,9 @@ export async function getMapPins(params: SearchParams = {}): Promise<MapPin[]> {
 
   let query = sb
     .from('tbl_external_raia_listings')
-    .select('raia_id,latitude,longitude,rent_pcm,asking_price,bedrooms,property_type,photo_url,agent_id')
+    .select('raia_id,latitude,longitude,rent_pcm,asking_price,bedrooms,property_type,photo_url,agent_id');
+
+  query = query
     .is('withdrawn_at', null)
     .is('duplicate_of', null)
     .eq('is_outlier', false)

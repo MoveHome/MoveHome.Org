@@ -2,6 +2,7 @@
 // component so server pages can use them without crossing the RSC boundary.
 
 import type { Listing } from './types';
+import { getEstateAgentProfile, EstateAgentProfile } from './agent-directory';
 
 const SYMBOLS: Record<string, string> = { THB: '฿', GBP: '£', USD: '$', EUR: '€' };
 
@@ -43,6 +44,12 @@ export function isVacant(l: Listing, now: Date = new Date()): boolean {
 }
 
 export function statusLabel(l: Listing, now: Date = new Date()): string {
+  if (l.listing_status === 'let_agreed') {
+    return 'Let Agreed · Register Interest';
+  }
+  if (l.listing_status === 'withdrawn') {
+    return 'Off-Market · Test View';
+  }
   if (l.listing_status === 'available' || !l.listing_status) {
     if (!isVacant(l, now)) {
       const d = new Date(l.available_from as string);
@@ -76,6 +83,37 @@ export function clusterOf(l: Listing): ClusterId {
   return 'other';
 }
 
+// Plain-English place labels. un_locode gives the city; the suburb is the leaf
+// users actually type. Codes never leak into the UI.
+const CITY_BY_LOCODE: Record<string, string> = {
+  GBLON: 'London',
+  GBMAN: 'Manchester',
+  GBRDG: 'Reading',
+  THBKK: 'Bangkok'
+};
+
+export function cityOf(l: Listing): string | null {
+  const code = (l.un_locode ?? '').toUpperCase();
+  if (CITY_BY_LOCODE[code]) return CITY_BY_LOCODE[code];
+  if (code.startsWith('TH') || l.jurisdiction === 'TH' || l.currency === 'THB') return 'Thailand';
+  if (code.startsWith('GB') || l.jurisdiction === 'GB' || l.currency === 'GBP') return 'UK';
+  return null;
+}
+
+// Every label this listing can be found by: city and suburb.
+export function locationsOf(l: Listing): string[] {
+  return [cityOf(l), l.suburb?.trim() || null].filter((x): x is string => Boolean(x));
+}
+
+// Monthly-equivalent price in GBP for the budget filter.
+// shortcut: fixed 45 THB/GBP, use a rate table when clients care about FX drift.
+export function priceGbp(l: Listing): number | null {
+  const p =
+    l.service_type === 'sale' ? l.asking_price : (l.rent_pcm ?? (l.daily_rate ? l.daily_rate * 30 : null));
+  if (p == null) return null;
+  return l.currency === 'THB' ? Math.round(p / 45) : p;
+}
+
 export function viewingSlots(now: Date = new Date()): { iso: string; label: string }[] {
   const out: { iso: string; label: string }[] = [];
   for (let d = 1; d <= 3; d++) {
@@ -106,4 +144,155 @@ export function plainText(html: string | null): string {
 // cards are ranked above bare ones.
 export function hasMedia(l: Listing): boolean {
   return Boolean(l.video_url || l.photos?.length || l.photo_url || l.featured_image_url);
+}
+
+export function scoreAiPrompt(l: Listing, prompt: string): number {
+  if (!prompt || !prompt.trim()) return 0;
+  const tokens = prompt
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((t) => t.length >= 2);
+  if (!tokens.length) return 0;
+
+  let score = 0;
+  const features = (l.features ?? []).map((f) => f.toLowerCase());
+  const headline = (l.headline ?? '').toLowerCase();
+  const suburb = (l.suburb ?? '').toLowerCase();
+  const propertyType = (l.property_type ?? '').toLowerCase();
+  const furnishing = (l.furnishing ?? '').toLowerCase();
+  const desc = plainText(l.marketing_description).toLowerCase();
+
+  for (const token of tokens) {
+    if (features.some((f) => f.includes(token))) {
+      score += 3;
+    }
+    if (
+      headline.includes(token) ||
+      suburb.includes(token) ||
+      propertyType.includes(token) ||
+      furnishing.includes(token)
+    ) {
+      score += 2;
+    }
+    if (desc.includes(token)) {
+      score += 1;
+    }
+  }
+
+  return score;
+}
+
+export function filterProperties(
+  listings: Listing[],
+  opts: {
+    locations?: string[];
+    serviceType?: string;
+    maxBudget?: number | null;
+    minBeds?: number | null;
+    aiPrompt?: string;
+    statusFilter?: 'all' | 'available' | 'let_agreed';
+  } = {}
+): Listing[] {
+  let filtered = listings.filter((l) => {
+    if (opts.statusFilter && opts.statusFilter !== 'all') {
+      if (opts.statusFilter === 'available' && l.listing_status && l.listing_status !== 'available') {
+        return false;
+      }
+      if (opts.statusFilter === 'let_agreed' && l.listing_status !== 'let_agreed') {
+        return false;
+      }
+    }
+
+    if (opts.serviceType && l.service_type !== opts.serviceType) {
+      return false;
+    }
+
+    if (opts.minBeds != null && (l.bedrooms == null || l.bedrooms < opts.minBeds)) {
+      return false;
+    }
+
+    if (opts.maxBudget != null) {
+      if (l.service_type === 'sale') {
+        if (opts.maxBudget >= 25000 && (l.asking_price == null || l.asking_price > opts.maxBudget)) {
+          return false;
+        }
+      } else {
+        const pGbp = priceGbp(l);
+        if (pGbp != null && pGbp > opts.maxBudget) {
+          return false;
+        }
+      }
+    }
+
+    if (opts.locations && opts.locations.length > 0) {
+      const locs = locationsOf(l).map((x) => x.toLowerCase());
+      const matchesLoc = opts.locations.some((reqLoc) =>
+        locs.some((loc) => loc.includes(reqLoc.toLowerCase()) || reqLoc.toLowerCase().includes(loc))
+      );
+      if (!matchesLoc) return false;
+    }
+
+    return true;
+  });
+
+  if (opts.aiPrompt && opts.aiPrompt.trim()) {
+    const scored = filtered
+      .map((l) => ({ listing: l, score: scoreAiPrompt(l, opts.aiPrompt!) }))
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score);
+    filtered = scored.map((item) => item.listing);
+  }
+
+  return filtered;
+}
+
+export function buildWellKnownPropertyCard(l: Listing) {
+  const price = l.rent_pcm ?? l.asking_price ?? l.daily_rate ?? 0;
+  return {
+    schema_version: '0.3.0',
+    raia_id: l.raia_id,
+    agent_id: l.agent_id,
+    agent_card_url: l.agent_card_url,
+    enquiry_endpoint: l.enquiry_endpoint,
+    headline: l.headline,
+    marketing_description: plainText(l.marketing_description),
+    property_type: l.property_type,
+    service_type: l.service_type,
+    bedrooms: l.bedrooms,
+    bathrooms: l.bathrooms,
+    floor_area_sqm: l.floor_area_sqm,
+    furnishing: l.furnishing,
+    price,
+    currency: l.currency ?? 'GBP',
+    rent_pcm: l.rent_pcm,
+    asking_price: l.asking_price,
+    daily_rate: l.daily_rate,
+    available_from: l.available_from,
+    listing_status: l.listing_status,
+    location: {
+      un_locode: l.un_locode,
+      jurisdiction: l.jurisdiction,
+      latitude: l.latitude,
+      longitude: l.longitude,
+      postcode_full: l.postcode_full,
+      postcode_district: l.postcode_district,
+      postcode_sector: l.postcode_sector,
+      street_name: l.street_name,
+      building_number: l.building_number,
+      suburb: l.suburb
+    },
+    media: {
+      photo_url: l.photo_url,
+      featured_image_url: l.featured_image_url,
+      photos: l.photos,
+      floor_plan_url: l.floor_plan_url ?? null,
+      video_url: l.video_url,
+      tour_360_url: l.tour_360_url ?? null
+    },
+    tour_360_url: l.tour_360_url ?? null,
+    floor_plan_url: l.floor_plan_url ?? null,
+    estate_agent: getEstateAgentProfile(l.agent_id),
+    features: l.features,
+    jurisdiction_extensions: l.jurisdiction_extensions
+  };
 }

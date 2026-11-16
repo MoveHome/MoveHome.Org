@@ -1,29 +1,48 @@
 'use client';
 
-// Swipe deck shell: filter + location-cluster pill bar, one card at a time,
-// saved badge in the bottom nav. Owns the stream index and localStorage saves.
+// Swipe deck shell: one hamburger, a plain-English location type-ahead, and a
+// filter-preferences sheet on the right. Owns the stream index, filters and
+// localStorage saves.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Listing } from '@/lib/types';
-import TinderPropertyCard from './TinderPropertyCard';
-import { CLUSTER_PILLS, clusterOf } from '@/lib/property-card';
+import PropertyCard from './PropertyCard';
+import { clusterOf, locationsOf, priceGbp } from '@/lib/property-card';
 
 const SAVED_KEY = 'movehome.saved.v1';
 
 type Tab = 'explore' | 'saved' | 'viewings';
+type Service = 'all' | 'long_term' | 'short_term' | 'sale';
 
-const SERVICE_FILTERS = [
-  ['all', 'All types'],
-  ['long_term', 'Rent (Long term)'],
-  ['short_term', 'Short let'],
-  ['sale', 'Buy']
-] as const;
+const SERVICE_FILTERS: [Service, string][] = [
+  ['all', 'All'],
+  ['long_term', 'Lettings (Rent)'],
+  ['short_term', 'Short Let'],
+  ['sale', 'Sales (Buy)']
+];
 
-const SITE_LINKS = [
-  ['https://movehome.org', 'Main Website'],
+const BUDGETS: [number, string][] = [
+  [0, 'Any'],
+  [1500, '≤ £1,500'],
+  [2500, '≤ £2,500'],
+  [4000, '≤ £4,000']
+];
+
+const BEDROOMS: [number, string][] = [
+  [-1, 'Any'],
+  [0, 'Studio+'],
+  [1, '1+'],
+  [2, '2+'],
+  [3, '3+']
+];
+
+const MENU_LINKS = [
+  ['/', 'Home (movehome.org)'],
   ['/about', 'About MoveHome CIC'],
   ['/registry', 'Agent Registry'],
-  ['/about#charter', 'The Charter']
+  ['/registry/submit', 'Register an Estate Agent'],
+  ['/about#charter', 'The Charter'],
+  ['/skills.md', 'Connect Your AI Agent']
 ] as const;
 
 function readSaved(): string[] {
@@ -35,6 +54,12 @@ function readSaved(): string[] {
   }
 }
 
+const haystack = (l: Listing) =>
+  [l.headline, l.marketing_description, l.development_name, ...l.features]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase();
+
 export default function PropertyDeck({
   listings,
   initialRaiaId
@@ -42,14 +67,22 @@ export default function PropertyDeck({
   listings: Listing[];
   initialRaiaId?: string;
 }) {
-  const [pill, setPill] = useState<string>('all');
-  const [service, setService] = useState<'all' | 'long_term' | 'short_term' | 'sale'>('all');
+  const [locations, setLocations] = useState<string[]>([]);
+  const [service, setService] = useState<Service>('all');
+  const [budget, setBudget] = useState(0);
+  const [beds, setBeds] = useState(-1);
+  const [prompt, setPrompt] = useState('');
+  const [query, setQuery] = useState('');
+  const [picking, setPicking] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [drawer, setDrawer] = useState(false);
   const [tab, setTab] = useState<Tab>('explore');
   const [saved, setSaved] = useState<string[]>([]);
   const [index, setIndex] = useState(() =>
     Math.max(0, listings.findIndex((l) => l.raia_id === initialRaiaId))
   );
+  const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => setSaved(readSaved()), []);
 
@@ -66,112 +99,224 @@ export default function PropertyDeck({
     });
   }
 
-  const stream = useMemo(
-    () =>
-      listings.filter((l) =>
-        tab === 'saved'
-          ? saved.includes(l.raia_id)
-          : tab === 'viewings'
-            ? false
-            : (pill === 'all' || clusterOf(l) === pill) && (service === 'all' || l.service_type === service)
-      ),
-    [listings, pill, service, tab, saved]
-  );
+  // Every label a user can type, in plain English, never a locode.
+  const locationOptions = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const l of listings) for (const loc of locationsOf(l)) seen.set(loc.toLowerCase(), loc);
+    return [...seen.values()].sort((a, b) => a.localeCompare(b));
+  }, [listings]);
+
+  const suggestions = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return locationOptions
+      .filter((o) => !locations.includes(o) && (!q || o.toLowerCase().includes(q)))
+      .slice(0, 8);
+  }, [locationOptions, locations, query]);
+
+  const activeCount =
+    (locations.length > 0 ? 1 : 0) +
+    (service !== 'all' ? 1 : 0) +
+    (budget > 0 ? 1 : 0) +
+    (beds >= 0 ? 1 : 0) +
+    (prompt.trim() ? 1 : 0);
+
+  const stream = useMemo(() => {
+    const tokens = prompt.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return listings.filter((l) => {
+      if (tab === 'saved') return saved.includes(l.raia_id);
+      if (tab === 'viewings') return false;
+      if (
+        locations.length &&
+        !locationsOf(l).some((loc) => locations.some((s) => s.toLowerCase() === loc.toLowerCase()))
+      ) {
+        return false;
+      }
+      if (service !== 'all' && l.service_type !== service) return false;
+      if (budget > 0 && l.service_type !== 'sale') {
+        const price = priceGbp(l);
+        // Unknown price stays visible — hiding it silently loses listings.
+        if (price != null && price > budget) return false;
+      }
+      if (beds >= 1 && (l.bedrooms ?? 0) < beds) return false;
+      // Every keyword must match: refinement, not recall.
+      if (tokens.length) {
+        const hay = haystack(l);
+        if (!tokens.every((t) => hay.includes(t))) return false;
+      }
+      return true;
+    });
+  }, [listings, locations, service, budget, beds, prompt, tab, saved]);
 
   const safeIndex = Math.min(index, Math.max(0, stream.length - 1));
   const current = stream[safeIndex];
+
+  // A filter change invalidates the position in the stream.
+  useEffect(() => {
+    setIndex(0);
+    setDrawer(false);
+  }, [locations, service, budget, beds, prompt, tab]);
+
+  // Silently warm the next card's first frame (image or video poster) and prefetch audio TTS.
+  useEffect(() => {
+    const nextListing = stream[safeIndex + 1];
+    if (!nextListing) return;
+    const src =
+      nextListing.photo_url ||
+      nextListing.featured_image_url ||
+      nextListing.photos?.[0]?.url ||
+      nextListing.video_url;
+    if (src) {
+      const img = new window.Image();
+      img.src = src;
+    }
+    // N+1 audio prefetch with cancellation signal to prevent runaway/overlapping fetches
+    const controller = new AbortController();
+    fetch(`/api/tts?raia_id=${encodeURIComponent(nextListing.raia_id)}`, {
+      signal: controller.signal
+    }).catch(() => {});
+    return () => controller.abort();
+  }, [stream, safeIndex]);
+
+  const go = (delta: number) => {
+    setDrawer(false);
+    setIndex(Math.max(0, Math.min(stream.length - 1, safeIndex + delta)));
+  };
+
+  // Keyboard: arrows move property (↑/↓) or photo (←/→); i/Enter opens details.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (drawer || filterOpen || menuOpen) return;
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        go(-1);
+      } else if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        go(1);
+      } else if (e.key === 'i' || e.key === 'Enter') {
+        setDrawer(true);
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [drawer, filterOpen, menuOpen, safeIndex, stream.length]);
 
   const emptyCopy =
     tab === 'saved'
       ? ['No saved properties yet', 'Tap the heart on a card to keep it here.']
       : tab === 'viewings'
         ? ['No viewings booked yet', 'Book one from any card.']
-        : ['No properties in this cluster', 'Try the All filter.'];
+        : ['No properties match', 'Try removing a location or filter.'];
 
   return (
     <div className="flex h-[100dvh] w-full flex-col bg-[#09090b] text-zinc-100">
-      {/* Top filter bar */}
+      {/* Top bar: hamburger · location type-ahead · filter settings */}
       <header className="relative z-30 shrink-0 border-b border-zinc-800/60 bg-[#0a0a0c] px-3 pb-2 pt-3">
         <div className="mx-auto flex w-full max-w-[420px] items-center gap-2">
-          <a
-            href="https://movehome.org"
-            aria-label="MoveHome.org home"
-            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-zinc-800 bg-zinc-900 text-zinc-200 transition-colors hover:border-emerald-500"
-          >
-            <HomeIcon />
-          </a>
           <button
             type="button"
-            onClick={() => setFilterOpen((v) => !v)}
-            aria-expanded={filterOpen}
-            aria-label="Filters and site menu"
-            className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border bg-zinc-900 transition-colors ${
-              filterOpen || service !== 'all'
+            onClick={() => setMenuOpen((v) => !v)}
+            aria-expanded={menuOpen}
+            aria-label="Menu"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-zinc-800 bg-zinc-900 text-zinc-200 transition-colors hover:border-emerald-500"
+          >
+            <MenuIcon />
+          </button>
+
+          <div className="relative min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-1 rounded-2xl border border-zinc-800 bg-zinc-900/70 px-1.5 py-1 focus-within:border-emerald-500">
+              {locations.map((loc) => (
+                <span
+                  key={loc}
+                  className="inline-flex items-center gap-1 rounded-full bg-emerald-500 px-2 py-0.5 text-[11px] font-bold text-emerald-950"
+                >
+                  {loc}
+                  <button
+                    type="button"
+                    onClick={() => setLocations((prev) => prev.filter((x) => x !== loc))}
+                    aria-label={`Remove ${loc}`}
+                    className="text-emerald-950/80 hover:text-emerald-950"
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+              <input
+                ref={searchRef}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onFocus={() => setPicking(true)}
+                onBlur={() => setTimeout(() => setPicking(false), 120)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && suggestions[0]) {
+                    setLocations((prev) => [...prev, suggestions[0]]);
+                    setQuery('');
+                    e.preventDefault();
+                  } else if (e.key === 'Backspace' && !query && locations.length) {
+                    setLocations((prev) => prev.slice(0, -1));
+                  }
+                }}
+                placeholder="Add locations… e.g. Fulham, Holborn, Bangkok"
+                aria-label="Search locations"
+                className="min-w-[7rem] flex-1 bg-transparent px-1 py-0.5 text-xs text-zinc-100 outline-none placeholder:text-zinc-500"
+              />
+            </div>
+
+            {picking && suggestions.length > 0 && (
+              <ul className="absolute inset-x-0 top-full z-40 mt-1 max-h-56 overflow-y-auto rounded-xl border border-zinc-800 bg-[#0a0a0c] py-1 shadow-2xl [scrollbar-width:none]">
+                {suggestions.map((opt) => (
+                  <li key={opt}>
+                    <button
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => {
+                        setLocations((prev) => [...prev, opt]);
+                        setQuery('');
+                        searchRef.current?.focus();
+                      }}
+                      className="block w-full px-3 py-1.5 text-left text-xs font-semibold text-zinc-300 hover:bg-emerald-500/15 hover:text-emerald-300"
+                    >
+                      {opt}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setFilterOpen(true)}
+            aria-label={`Filter preferences${activeCount ? `, ${activeCount} active` : ''}`}
+            className={`relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full border bg-zinc-900 transition-colors ${
+              activeCount
                 ? 'border-emerald-500 text-emerald-400'
                 : 'border-zinc-800 text-zinc-200 hover:border-emerald-500'
             }`}
           >
-            <MenuIcon />
+            <FilterIcon />
+            {activeCount > 0 && (
+              <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-emerald-500 px-1 text-[9px] font-bold text-emerald-950">
+                {activeCount}
+              </span>
+            )}
           </button>
-          <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto [scrollbar-width:none]">
-            {CLUSTER_PILLS.map((p) => {
-              const active = tab === 'explore' && pill === p.id;
-              return (
-                <button
-                  key={p.id}
-                  type="button"
-                  onClick={() => {
-                    setTab('explore');
-                    setPill(p.id);
-                    setIndex(0);
-                  }}
-                  className={`shrink-0 whitespace-nowrap rounded-full border px-3 py-1.5 text-xs transition-colors ${
-                    active
-                      ? 'border-emerald-500 bg-emerald-500 font-bold text-emerald-950'
-                      : 'border-zinc-800 bg-zinc-900/90 font-semibold text-zinc-400'
-                  }`}
-                >
-                  {p.label}
-                </button>
-              );
-            })}
-          </div>
         </div>
 
-        {filterOpen && (
-          <div className="absolute left-1/2 top-full z-30 mt-1 w-[min(420px,calc(100%-1.5rem))] -translate-x-1/2 rounded-2xl border border-zinc-800 bg-[#0a0a0c] p-3 shadow-2xl">
-            <div className="flex flex-wrap gap-1.5">
-              {SERVICE_FILTERS.map(([id, label]) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => {
-                    setService(id);
-                    setTab('explore');
-                    setIndex(0);
-                  }}
-                  className={`rounded-full border px-3 py-1.5 text-[11px] font-semibold ${
-                    service === id
-                      ? 'border-emerald-500 bg-emerald-500 text-emerald-950'
-                      : 'border-zinc-800 bg-zinc-900 text-zinc-400'
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-            <div className="mt-3 flex flex-col divide-y divide-zinc-800/80 border-t border-zinc-800/80 pt-1">
-              {SITE_LINKS.map(([href, label]) => (
-                <a
-                  key={href}
-                  href={href}
-                  className="py-2 text-xs font-semibold text-zinc-300 hover:text-emerald-400"
-                >
-                  {label}
-                </a>
-              ))}
-            </div>
-          </div>
+        {menuOpen && (
+          <nav className="absolute left-3 top-full z-40 mt-1 w-[220px] overflow-hidden rounded-2xl border border-zinc-800 bg-[#0a0a0c] py-1 shadow-2xl">
+            {MENU_LINKS.map(([href, label]) => (
+              <a
+                key={href}
+                href={href}
+                onClick={() => setMenuOpen(false)}
+                className="block px-4 py-2 text-xs font-semibold text-zinc-300 hover:bg-emerald-500/10 hover:text-emerald-300"
+              >
+                {label}
+              </a>
+            ))}
+          </nav>
         )}
       </header>
 
@@ -179,7 +324,7 @@ export default function PropertyDeck({
       <main className="mx-auto flex w-full max-w-[420px] flex-1 flex-col px-3 pb-2 pt-1 min-h-0">
         <div className="relative flex-1 min-h-0">
           {current ? (
-            <TinderPropertyCard
+            <PropertyCard
               key={current.raia_id}
               listing={current}
               similar={listings.filter(
@@ -187,11 +332,14 @@ export default function PropertyDeck({
               )}
               saved={saved.includes(current.raia_id)}
               onToggleSave={toggleSave}
-              onPass={() => setIndex(Math.min(stream.length - 1, safeIndex + 1))}
-              onRewind={() => setIndex(Math.max(0, safeIndex - 1))}
+              onPass={() => go(1)}
+              onRewind={() => go(-1)}
+              drawer={drawer}
+              onDrawerChange={setDrawer}
+              keysEnabled={!filterOpen && !menuOpen}
               onSelect={(id) => {
                 const i = stream.findIndex((l) => l.raia_id === id);
-                if (i >= 0) setIndex(i);
+                if (i >= 0) go(i - safeIndex);
               }}
             />
           ) : (
@@ -200,9 +348,31 @@ export default function PropertyDeck({
               <p className="text-xs text-zinc-500">{emptyCopy[1]}</p>
             </div>
           )}
+
+          {/* Desktop prev/next rail, outside the card */}
+          <div className="pointer-events-none absolute -right-14 inset-y-0 hidden flex-col items-center justify-center gap-3 md:flex">
+            <button
+              type="button"
+              onClick={() => go(-1)}
+              aria-label="Previous property"
+              className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900/90 text-zinc-200 hover:border-emerald-500 hover:text-emerald-400"
+            >
+              <ChevronIcon up />
+            </button>
+            <button
+              type="button"
+              onClick={() => go(1)}
+              aria-label="Next property"
+              className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900/90 text-zinc-200 hover:border-emerald-500 hover:text-emerald-400"
+            >
+              <ChevronIcon />
+            </button>
+          </div>
         </div>
         <p className="pt-1 text-center text-[10px] text-zinc-600">
-          {current ? `${safeIndex + 1} / ${stream.length} · swipe or tap to explore` : '—'}
+          {current
+            ? `${safeIndex + 1} / ${stream.length} · swipe up for next, down for previous`
+            : '—'}
         </p>
       </main>
 
@@ -259,6 +429,139 @@ export default function PropertyDeck({
           </a>
         </div>
       </nav>
+
+      {/* Filter preferences sheet */}
+      {filterOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Filter preferences"
+          className="fixed inset-0 z-50 flex flex-col justify-end bg-black/70"
+          onClick={() => setFilterOpen(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[90dvh] overflow-y-auto rounded-t-3xl border-t border-zinc-800 bg-[#0a0a0c] p-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          >
+            <div className="mx-auto mb-3 flex w-full max-w-[420px] items-center justify-between">
+              <h2 className="text-sm font-bold">Discovery settings</h2>
+              <button
+                type="button"
+                onClick={() => setFilterOpen(false)}
+                className="rounded-full bg-white px-4 py-1.5 text-xs font-bold text-black"
+              >
+                Done
+              </button>
+            </div>
+
+            <div className="mx-auto w-full max-w-[420px] space-y-4">
+              <Section title="Locations">
+                <div className="flex flex-wrap gap-1.5">
+                  {locationOptions.map((loc) => {
+                    const on = locations.includes(loc);
+                    return (
+                      <button
+                        key={loc}
+                        type="button"
+                        aria-pressed={on}
+                        onClick={() =>
+                          setLocations((prev) =>
+                            on ? prev.filter((x) => x !== loc) : [...prev, loc]
+                          )
+                        }
+                        className={`rounded-full border px-3 py-1.5 text-[11px] font-semibold ${
+                          on
+                            ? 'border-emerald-500 bg-emerald-500 text-emerald-950'
+                            : 'border-zinc-800 bg-zinc-900 text-zinc-400'
+                        }`}
+                      >
+                        {loc}
+                      </button>
+                    );
+                  })}
+                </div>
+              </Section>
+
+              <Section title="Transaction type">
+                <PillRow options={SERVICE_FILTERS} value={service} onChange={(v) => setService(v as Service)} />
+              </Section>
+
+              <Section title="Max budget per month">
+                <PillRow options={BUDGETS} value={budget} onChange={(v) => setBudget(Number(v))} />
+              </Section>
+
+              <Section title="Min bedrooms">
+                <PillRow options={BEDROOMS} value={beds} onChange={(v) => setBeds(Number(v))} />
+              </Section>
+
+              <Section title="Refine with AI">
+                <input
+                  value={prompt}
+                  onChange={(e) => setPrompt(e.target.value)}
+                  placeholder="e.g. balcony, garden, near tube"
+                  className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2.5 text-xs outline-none placeholder:text-zinc-500 focus:border-emerald-500"
+                />
+                <p className="mt-1 text-[10px] text-zinc-500">
+                  Filters features, headlines and descriptions as you type.
+                </p>
+              </Section>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setLocations([]);
+                  setService('all');
+                  setBudget(0);
+                  setBeds(-1);
+                  setPrompt('');
+                }}
+                className="w-full rounded-full border border-zinc-800 py-2 text-[11px] font-semibold text-zinc-400 hover:text-zinc-200"
+              >
+                Reset filters
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section>
+      <h3 className="mb-2 text-[10px] font-bold uppercase tracking-wide text-zinc-500">{title}</h3>
+      {children}
+    </section>
+  );
+}
+
+function PillRow({
+  options,
+  value,
+  onChange
+}: {
+  options: [string | number, string][];
+  value: string | number;
+  onChange: (v: string | number) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {options.map(([id, label]) => (
+        <button
+          key={id}
+          type="button"
+          aria-pressed={value === id}
+          onClick={() => onChange(id)}
+          className={`rounded-full border px-3 py-1.5 text-[11px] font-semibold ${
+            value === id
+              ? 'border-emerald-500 bg-emerald-500 text-emerald-950'
+              : 'border-zinc-800 bg-zinc-900 text-zinc-400'
+          }`}
+        >
+          {label}
+        </button>
+      ))}
     </div>
   );
 }
@@ -278,20 +581,33 @@ function svgProps(size = 20) {
   };
 }
 
-function HomeIcon() {
-  return (
-    <svg {...svgProps(18)}>
-      <path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z" />
-    </svg>
-  );
-}
-
 function MenuIcon() {
   return (
     <svg {...svgProps(18)}>
       <line x1="4" y1="7" x2="20" y2="7" />
       <line x1="4" y1="12" x2="14" y2="12" />
       <line x1="4" y1="17" x2="18" y2="17" />
+    </svg>
+  );
+}
+
+function FilterIcon() {
+  return (
+    <svg {...svgProps(18)}>
+      <line x1="4" y1="7" x2="20" y2="7" />
+      <line x1="4" y1="12" x2="20" y2="12" />
+      <line x1="4" y1="17" x2="20" y2="17" />
+      <circle cx="9" cy="7" r="2" fill="currentColor" />
+      <circle cx="15" cy="12" r="2" fill="currentColor" />
+      <circle cx="8" cy="17" r="2" fill="currentColor" />
+    </svg>
+  );
+}
+
+function ChevronIcon({ up }: { up?: boolean }) {
+  return (
+    <svg {...svgProps(18)}>
+      <polyline points={up ? '6 14 12 8 18 14' : '6 10 12 16 18 10'} />
     </svg>
   );
 }
