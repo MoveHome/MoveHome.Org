@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Listing } from '@/lib/types';
-import TinderPropertyCard from './TinderPropertyCard';
+import PropertyCard from './PropertyCard';
 import { clusterOf, locationsOf, priceGbp } from '@/lib/property-card';
 
 const SAVED_KEY = 'movehome.saved.v1';
@@ -40,7 +40,9 @@ const MENU_LINKS = [
   ['/', 'Home (movehome.org)'],
   ['/about', 'About MoveHome CIC'],
   ['/registry', 'Agent Registry'],
-  ['/about#charter', 'The Charter']
+  ['/registry/submit', 'Register an Estate Agent'],
+  ['/about#charter', 'The Charter'],
+  ['/skills.md', 'Connect Your AI Agent']
 ] as const;
 
 function readSaved(): string[] {
@@ -154,7 +156,7 @@ export default function PropertyDeck({
     setDrawer(false);
   }, [locations, service, budget, beds, prompt, tab]);
 
-  // Silently warm the next card's first frame (image or video poster).
+  // Silently warm the next card's first frame (image or video poster) and prefetch audio TTS.
   useEffect(() => {
     const nextListing = stream[safeIndex + 1];
     if (!nextListing) return;
@@ -163,9 +165,12 @@ export default function PropertyDeck({
       nextListing.featured_image_url ||
       nextListing.photos?.[0]?.url ||
       nextListing.video_url;
-    if (!src) return;
-    const img = new window.Image();
-    img.src = src;
+    if (src) {
+      const img = new window.Image();
+      img.src = src;
+    }
+    // N+1 audio prefetch
+    fetch(`/api/tts?raia_id=${encodeURIComponent(nextListing.raia_id)}`).catch(() => {});
   }, [stream, safeIndex]);
 
   const go = (delta: number) => {
@@ -315,7 +320,7 @@ export default function PropertyDeck({
       <main className="mx-auto flex w-full max-w-[420px] flex-1 flex-col px-3 pb-2 pt-1 min-h-0">
         <div className="relative flex-1 min-h-0">
           {current ? (
-            <TinderPropertyCard
+            <PropertyCard
               key={current.raia_id}
               listing={current}
               similar={listings.filter(

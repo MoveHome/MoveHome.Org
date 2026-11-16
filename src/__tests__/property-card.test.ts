@@ -17,7 +17,7 @@ describe('property-card helpers', () => {
     expect(statusLabel(listing({ listing_status: 'available' }))).toBe('Vacant · Available Now');
     const future = new Date(Date.now() + 7 * 86_400_000).toISOString();
     expect(isVacant(listing({ listing_status: 'available', available_from: future }))).toBe(false);
-    expect(statusLabel(listing({ listing_status: 'let_agreed' }))).toBe('let agreed');
+    expect(statusLabel(listing({ listing_status: 'let_agreed' }))).toBe('Let Agreed · Register Interest');
   });
 
   it('returns bare spec groups (the ✓ is rendered by the HUD)', () => {

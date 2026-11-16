@@ -156,8 +156,13 @@ export async function searchListings(
 
   let query = sb
     .from('tbl_external_raia_listings')
-    .select('*', { count: 'exact' })
-    .is('withdrawn_at', null)
+    .select('*', { count: 'exact' });
+
+  if (process.env.NEXT_PUBLIC_MOVEHOME_STRICT_CRM_PUBLISH === 'true') {
+    query = query.is('withdrawn_at', null);
+  }
+
+  query = query
     .is('duplicate_of', null)
     .eq('is_outlier', false)
     .eq('visibility', 'public')
@@ -177,7 +182,7 @@ export async function searchListings(
   if (params.asking_price_max !== undefined) query = query.lte('asking_price', params.asking_price_max);
   if (params.features?.length) query = query.contains('features', params.features);
 
-  const limit = params.limit ?? 24;
+  const limit = params.limit ?? 200;
   query = query.range(params.offset ?? 0, (params.offset ?? 0) + limit - 1);
 
   const { data, count, error } = await query;
@@ -222,8 +227,13 @@ export async function getMapPins(params: SearchParams = {}): Promise<MapPin[]> {
 
   let query = sb
     .from('tbl_external_raia_listings')
-    .select('raia_id,latitude,longitude,rent_pcm,asking_price,bedrooms,property_type,photo_url,agent_id')
-    .is('withdrawn_at', null)
+    .select('raia_id,latitude,longitude,rent_pcm,asking_price,bedrooms,property_type,photo_url,agent_id');
+
+  if (process.env.NEXT_PUBLIC_MOVEHOME_STRICT_CRM_PUBLISH === 'true') {
+    query = query.is('withdrawn_at', null);
+  }
+
+  query = query
     .is('duplicate_of', null)
     .eq('is_outlier', false)
     .eq('visibility', 'public')
