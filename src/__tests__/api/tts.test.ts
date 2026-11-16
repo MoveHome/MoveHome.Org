@@ -140,16 +140,16 @@ describe('voice selection', () => {
 
   it('derives the locale from the listing when omitted, matching the client resolver', () => {
     expect(resolveLang(null, listing())).toBe('en-GB');
-    expect(resolveLang(null, listing({ jurisdiction: 'TH', currency: 'THB' }))).toBe('th-TH');
-    expect(resolveLang(null, listing({ jurisdiction: 'MY', currency: 'MYR' }))).toBe('ms-MY');
-    expect(resolveLang(null, listing({ jurisdiction: 'JP', currency: 'JPY' }))).toBe('ja-JP');
+    expect(resolveLang(null, listing({ jurisdiction: 'TH', currency: 'THB', un_locode: 'THBKK' }))).toBe('th-TH');
+    expect(resolveLang(null, listing({ jurisdiction: 'MY', currency: 'MYR', un_locode: 'MYKUL' }))).toBe('ms-MY');
+    expect(resolveLang(null, listing({ jurisdiction: 'JP', currency: 'JPY', un_locode: 'JPKYO' }))).toBe('ja-JP');
     expect(resolveLang('ja-JP', listing())).toBe('ja-JP');
     expect(resolveLang('fr-FR', listing())).toBeNull();
     for (const l of [
       listing(),
-      listing({ jurisdiction: 'TH', currency: 'THB' }),
-      listing({ jurisdiction: 'MY', currency: 'MYR' }),
-      listing({ jurisdiction: 'JP', currency: 'JPY' })
+      listing({ jurisdiction: 'TH', currency: 'THB', un_locode: 'THBKK' }),
+      listing({ jurisdiction: 'MY', currency: 'MYR', un_locode: 'MYKUL' }),
+      listing({ jurisdiction: 'JP', currency: 'JPY', un_locode: 'JPKYO' })
     ]) {
       expect(resolveLang(null, l)).toBe(ttsLocaleOf(l));
     }
