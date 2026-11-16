@@ -16,7 +16,9 @@ import {
   specGroups,
   statusLabel,
   titleOf,
+  ttsLocaleOf,
   viewingSlots,
+  voiceMatchesGender,
   youtubeIdOf
 } from '@/lib/property-card';
 
@@ -33,6 +35,7 @@ interface Props {
   drawer: boolean;
   onDrawerChange: (open: boolean) => void;
   keysEnabled?: boolean;
+  voiceGender?: 'female' | 'male';
   onFilterByAgent?: (agentId: string) => void;
 }
 
@@ -78,6 +81,7 @@ export default function PropertyCard({
   drawer,
   onDrawerChange,
   keysEnabled = true,
+  voiceGender = 'female',
   onFilterByAgent
 }: Props) {
   const slides = useMemo(() => slidesOf(listing), [listing]);
@@ -149,6 +153,8 @@ export default function PropertyCard({
     stopNarration();
   }, [listing.raia_id, drawer, stopNarration]);
 
+  const locale = ttsLocaleOf(listing);
+
   // Local browser voice: the fallback when the TTS endpoint has no key/audio.
   function speakLocal() {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
@@ -156,6 +162,11 @@ export default function PropertyCard({
     const u = new SpeechSynthesisUtterance(
       buildPropertyDescriptionWithCta(listing, agentProfile?.name)
     );
+    u.lang = locale;
+    const voices = window.speechSynthesis
+      .getVoices()
+      .filter((v) => v.lang.replace('_', '-').toLowerCase().startsWith(locale.toLowerCase()));
+    u.voice = voices.find((v) => voiceMatchesGender(v.name, voiceGender)) ?? voices[0] ?? null;
     u.rate = 1;
     u.onend = () => setNarration('idle');
     u.onerror = () => setNarration('idle');
@@ -179,9 +190,10 @@ export default function PropertyCard({
 
     (async () => {
       try {
-        const res = await fetch(`/api/tts?raia_id=${encodeURIComponent(listing.raia_id)}`, {
-          signal: abort.signal
-        });
+        const res = await fetch(
+          `/api/tts?raia_id=${encodeURIComponent(listing.raia_id)}&lang=${locale}&gender=${voiceGender}`,
+          { signal: abort.signal }
+        );
         if (!res.ok) throw new Error(`tts ${res.status}`);
         const url = URL.createObjectURL(await res.blob());
         const cur = narrationRef.current;
