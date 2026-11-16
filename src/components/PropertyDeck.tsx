@@ -61,13 +61,21 @@ const BEDROOMS: [number, string][] = [
   [3, '3+']
 ];
 
-const MENU_LINKS = [
-  ['/', 'Home (movehome.org)'],
-  ['/about', 'About MoveHome CIC'],
-  ['/registry', 'Agent Registry'],
-  ['/registry/submit', 'Register an Estate Agent'],
-  ['/about#charter', 'The Charter'],
-  ['/skills.md', 'Connect Your AI Agent']
+const MENU_SECTIONS = [
+  {
+    title: 'AI Agent',
+    links: [
+      ['/connect', 'Connect Your AI Agent']
+    ]
+  },
+  {
+    title: 'MoveHome',
+    links: [
+      ['/about', 'About'],
+      ['/charter', 'Charter'],
+      ['/terms', 'Terms']
+    ]
+  }
 ] as const;
 
 function readSaved(): string[] {
@@ -270,16 +278,40 @@ export default function PropertyDeck({
     <div className="flex h-[100dvh] w-full flex-col bg-[#09090b] text-zinc-100">
       {/* Top bar: hamburger button (left) · filter settings button (right) */}
       <header className="relative z-30 shrink-0 border-b border-zinc-800/60 bg-[#0a0a0c] px-3 pb-2 pt-3">
-        <div className="mx-auto flex w-full max-w-[420px] items-center justify-between gap-2">
-          <button
-            type="button"
-            onClick={() => setMenuOpen((v) => !v)}
-            aria-expanded={menuOpen}
-            aria-label="Menu"
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-zinc-800 bg-zinc-900 text-zinc-200 transition-colors hover:border-emerald-500"
-          >
-            <MenuIcon />
-          </button>
+        <div className="mx-auto flex w-full max-w-[420px] items-center justify-between gap-2 relative">
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setMenuOpen((v) => !v)}
+              aria-expanded={menuOpen}
+              aria-label="Menu"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-zinc-800 bg-zinc-900 text-zinc-200 transition-colors hover:border-emerald-500"
+            >
+              <MenuIcon />
+            </button>
+
+            {menuOpen && (
+              <nav className="absolute left-0 top-12 z-40 w-[220px] overflow-hidden rounded-2xl border border-white/15 bg-zinc-950/95 backdrop-blur-xl py-2 shadow-2xl">
+                {MENU_SECTIONS.map((section, sIdx) => (
+                  <div key={section.title} className={sIdx > 0 ? 'mt-2 pt-2 border-t border-zinc-800/60' : ''}>
+                    <div className="px-4 py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                      {section.title}
+                    </div>
+                    {section.links.map(([href, label]) => (
+                      <a
+                        key={href}
+                        href={href}
+                        onClick={() => setMenuOpen(false)}
+                        className="block px-4 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-emerald-500/10 hover:text-emerald-300"
+                      >
+                        {label}
+                      </a>
+                    ))}
+                  </div>
+                ))}
+              </nav>
+            )}
+          </div>
 
           <button
             type="button"
@@ -299,21 +331,6 @@ export default function PropertyDeck({
             )}
           </button>
         </div>
-
-        {menuOpen && (
-          <nav className="absolute left-3 top-full z-40 mt-1 w-[220px] overflow-hidden rounded-2xl border border-zinc-800 bg-[#0a0a0c] py-1 shadow-2xl">
-            {MENU_LINKS.map(([href, label]) => (
-              <a
-                key={href}
-                href={href}
-                onClick={() => setMenuOpen(false)}
-                className="block px-4 py-2 text-xs font-semibold text-zinc-300 hover:bg-emerald-500/10 hover:text-emerald-300"
-              >
-                {label}
-              </a>
-            ))}
-          </nav>
-        )}
       </header>
 
       {/* Deck viewport: full height on mobile, 375–420px card column on desktop */}
@@ -399,7 +416,10 @@ export default function PropertyDeck({
             }`}
           >
             <HeartNavIcon active={tab === 'saved'} />
-            Saved
+            <div className="flex flex-col items-center">
+              <span>Saved</span>
+              <span className="text-[9px] font-normal text-zinc-500 -mt-0.5">Saved on this device</span>
+            </div>
             {saved.length > 0 && (
               <span className="absolute left-1/2 top-0 ml-2.5 rounded-full bg-red-500 px-1.5 text-[9px] leading-4 text-white">
                 {saved.length}
@@ -432,12 +452,12 @@ export default function PropertyDeck({
           role="dialog"
           aria-modal="true"
           aria-label="Filter preferences"
-          className="fixed inset-0 z-50 flex flex-col justify-end bg-black/70"
+          className="fixed inset-0 z-50 flex flex-col justify-end bg-black/70 backdrop-blur-sm"
           onClick={() => setFilterOpen(false)}
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="max-h-[90dvh] overflow-y-auto rounded-t-3xl border-t border-zinc-800 bg-[#0a0a0c] p-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            className="max-h-[90dvh] overflow-y-auto rounded-t-3xl border-t border-white/15 bg-zinc-950/95 backdrop-blur-xl p-5 shadow-2xl [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           >
             <div className="mx-auto mb-3 flex w-full max-w-[420px] items-center justify-between">
               <h2 className="text-sm font-bold">Discovery settings</h2>
