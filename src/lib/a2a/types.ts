@@ -4,6 +4,8 @@
 import type { AgentCard as SdkAgentCard } from '@a2a-js/sdk';
 
 export interface AgentSupportedInterface {
+  /** Endpoint for this interface (required by A2A 1.0 AgentInterface). */
+  url?: string;
   protocolVersion: string;
   protocolBinding: string;
   securityRequirements?: Array<Record<string, string[]>>;

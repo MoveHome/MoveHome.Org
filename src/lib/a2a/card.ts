@@ -28,10 +28,12 @@ export function buildAgentCard(): AgentCard {
     preferredTransport: 'JSONRPC',
     supportedInterfaces: [
       {
+        url: `${SITE_URL}/api/a2a`,
         protocolVersion: '1.0',
         protocolBinding: 'JSONRPC'
       },
       {
+        url: `${SITE_URL}/api/a2a`,
         protocolVersion: '0.3',
         protocolBinding: 'JSONRPC'
       }
