@@ -65,6 +65,12 @@ test("a source with no photos reports a gap rather than failing", () => {
   assert.ok(gaps.includes("media.photos"));
 });
 
+test("sanitised descriptions pass parity against the cleaned source", () => {
+  const snap = { ...snapshot, marketing_description: "Lovely flat in London.\nContact us https://bit.ly/contact" };
+  const row = { ...rowFrom(snap), marketing_description: "Lovely flat in London." };
+  assert.deepEqual(checkParity(snap, row).mismatches, []);
+});
+
 test("changedFields is empty for an identical row and lists only real changes", () => {
   const next = rowFrom(snapshot);
   assert.deepEqual(changedFields({ ...next }, next), []);
