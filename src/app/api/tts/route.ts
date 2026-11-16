@@ -52,7 +52,7 @@ export async function GET(request: Request) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 8000);
   try {
-    listing = await getListingByRaiaId(raia_id);
+    listing = await getListingByRaiaId(raia_id, controller.signal);
   } catch (err) {
     console.error('[tts] DB lookup failed or timed out:', err);
     return NextResponse.json({ error: 'DB lookup failed' }, { status: 500 });

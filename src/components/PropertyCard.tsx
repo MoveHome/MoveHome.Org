@@ -153,7 +153,7 @@ export default function PropertyCard({
     <article className="relative h-full w-full select-none overflow-hidden rounded-[26px] bg-[#09090b] text-white shadow-2xl">
       {/* ── Media stage ───────────────────────────────────────────────── */}
       <div
-        className="absolute inset-0 touch-pan-y"
+        className="absolute inset-0 touch-none"
         onPointerDown={(e) => {
           if (e.pointerType === 'touch') {
             try {

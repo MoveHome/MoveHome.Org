@@ -198,17 +198,22 @@ export async function searchListings(
   };
 }
 
-export async function getListingByRaiaId(raia_id: string): Promise<Listing | null> {
+export async function getListingByRaiaId(raia_id: string, signal?: AbortSignal): Promise<Listing | null> {
   const sb = getSupabase();
   if (!sb) return null;
 
-  const { data, error } = await sb
+  let query = sb
     .from('tbl_external_raia_listings')
     .select('*')
     .eq('raia_id', raia_id)
     .is('withdrawn_at', null)
-    .eq('visibility', 'public')
-    .maybeSingle();
+    .eq('visibility', 'public');
+
+  if (signal) {
+    query = query.abortSignal(signal);
+  }
+
+  const { data, error } = await query.maybeSingle();
 
   if (error) {
     console.error('[getListingByRaiaId]', error.message);
