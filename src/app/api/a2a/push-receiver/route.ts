@@ -9,20 +9,20 @@
 //
 // Verification fails closed: alg/kid/jku/nonce/iat are checked, the key comes
 // from RAIA's fixed jku (never a caller-supplied URL), and a replayed
-// (kid, nonce) is rejected for 10 minutes. Logs carry request id + nonce +
-// verdict only — never bodies or key material.
+// (kid, nonce) is rejected for 10 minutes — durably, across instances (see
+// ./replay-store). Logs carry request id + nonce + verdict only — never bodies
+// or key material.
 
 import { NextResponse } from 'next/server';
 import { randomUUID } from 'node:crypto';
 import canonicalize from 'canonicalize';
 import { flattenedVerify, importJWK, type JWK } from 'jose';
+import { consumeNonce } from './replay-store';
 
 export const dynamic = 'force-dynamic';
 
 const RAIA_JKU = process.env.A2A_PUSH_JKU || 'https://app.estateaigents.com/.well-known/jwks.json';
 const MAX_SKEW_S = 300; // ADR-472: reject anything older/newer than 5 minutes
-const REPLAY_TTL_MS = 10 * 60_000; // ADR-472: retain (kid, nonce) for >= 10 min
-const REPLAY_MAX = 10_000; // bounded: a flood cannot grow the map without limit
 const JWKS_TTL_MS = 5 * 60_000;
 const FETCH_TIMEOUT_MS = 5_000;
 
@@ -37,9 +37,6 @@ type ProtectedHeader = {
   timestamp?: unknown;
 };
 
-// (kid, nonce) -> expiry. Per-instance only: a replay across cold lambdas is
-// caught by RAIA's own attempt uniqueness, not here.
-const replay = new Map<string, number>();
 let jwksCache: { at: number; keys: JWK[] } | null = null;
 
 function json(body: unknown, status = 200) {
@@ -164,14 +161,13 @@ export async function POST(req: Request) {
 
   // Only consume the nonce after the signature verifies, so a forged request
   // cannot burn a genuine nonce.
-  const now = Date.now();
-  for (const [k, exp] of replay) if (exp <= now) replay.delete(k);
-  const replayKey = `${hdr.kid}:${hdr.nonce}`;
-  if (replay.has(replayKey)) {
+  const verdict = await consumeNonce(hdr.kid, hdr.nonce);
+  if (verdict === 'replayed') {
     return fail(401, 'replayed_nonce', 'This (kid, nonce) pair was already delivered.');
   }
-  if (replay.size >= REPLAY_MAX) replay.delete(replay.keys().next().value as string);
-  replay.set(replayKey, now + REPLAY_TTL_MS);
+  if (verdict === 'unavailable') {
+    return fail(503, 'replay_store_unavailable', 'Could not record the delivery nonce.');
+  }
 
   log('accepted', requestId, nonce);
   return json({ ok: true, requestId }, 200);
