@@ -13,6 +13,71 @@ process.env.A2A_PUSH_JKU = JKU;
 let signingKey: CryptoKey;
 let publicJwk: JWK;
 
+// Durable replay store stand-in. Rows live on globalThis, so they survive
+// `vi.resetModules()` exactly as Postgres survives a cold lambda; the fake
+// enforces the same PRIMARY KEY (kid, nonce) collision as tbl_a2a_push_nonces.
+type NonceRow = { kid: string; nonce: string; expires_at: string };
+vi.mock('@/lib/supabase-admin', () => {
+  const store = globalThis as unknown as { __nonceRows?: Map<string, NonceRow>; __nonceDbDown?: boolean };
+  const rows = (store.__nonceRows ??= new Map<string, NonceRow>());
+  const rowKey = (r: NonceRow) => `${r.kid}:${r.nonce}`;
+
+  function table() {
+    let mode: 'select' | 'delete' = 'select';
+    let head = false;
+    let limit = Infinity;
+    let ordered = false;
+    const filters: Array<(r: NonceRow) => boolean> = [];
+
+    const run = async () => {
+      const matched = [...rows.values()].filter((r) => filters.every((f) => f(r)));
+      if (mode === 'delete') {
+        for (const r of matched) rows.delete(rowKey(r));
+        return { data: null, count: matched.length, error: null };
+      }
+      const sorted = ordered
+        ? [...matched].sort((a, b) => a.expires_at.localeCompare(b.expires_at))
+        : matched;
+      return {
+        data: head ? null : sorted.slice(0, limit),
+        count: matched.length,
+        error: null
+      };
+    };
+
+    const builder: Record<string, unknown> = {
+      lt: (col: keyof NonceRow, v: string) => (filters.push((r) => r[col] < v), builder),
+      lte: (col: keyof NonceRow, v: string) => (filters.push((r) => r[col] <= v), builder),
+      order: () => ((ordered = true), builder),
+      limit: (n: number) => ((limit = n), builder),
+      then: (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) => run().then(res, rej)
+    };
+
+    return {
+      select: (_cols: string, opts?: { count?: string; head?: boolean }) => {
+        head = Boolean(opts?.head);
+        return builder;
+      },
+      delete: () => {
+        mode = 'delete';
+        return builder;
+      },
+      insert: async (row: NonceRow) => {
+        if (rows.has(rowKey(row))) return { error: { code: '23505' } };
+        rows.set(rowKey(row), row);
+        return { error: null };
+      }
+    };
+  }
+
+  return {
+    createSupabaseAdminClient: () => {
+      if (store.__nonceDbDown) throw new Error('db down');
+      return { from: table };
+    }
+  };
+});
+
 vi.stubGlobal(
   'fetch',
   vi.fn(async (url: unknown) =>
@@ -100,6 +165,33 @@ describe('POST /api/a2a/push-receiver', () => {
     const replayed = await POST(post(signature, TASK_03, '0.3'));
     expect(replayed.status).toBe(401);
     expect((await replayed.json()).error).toBe('replayed_nonce');
+  });
+
+  // Cross-instance / cold start: on Vercel the replay may land on a lambda whose
+  // module state is empty. The guard must live in the durable store, so this
+  // re-imports the route as a fresh module instance between the two deliveries.
+  it('rejects the same (kid, nonce) from a fresh module instance (cross-instance replay)', async () => {
+    const signature = await sign(TASK_03, { nonce: randomUUID() });
+    expect((await POST(post(signature, TASK_03, '0.3'))).status).toBe(200);
+
+    vi.resetModules(); // drops every in-process Map; only the durable store survives
+    const fresh = await import('@/app/api/a2a/push-receiver/route');
+    expect(fresh.POST).not.toBe(POST);
+
+    const replayed = await fresh.POST(post(signature, TASK_03, '0.3'));
+    expect(replayed.status).toBe(401);
+    expect((await replayed.json()).error).toBe('replayed_nonce');
+  });
+
+  it('fails closed when the replay store is unreachable', async () => {
+    (globalThis as unknown as { __nonceDbDown?: boolean }).__nonceDbDown = true;
+    try {
+      const res = await POST(post(await sign(TASK_03), TASK_03, '0.3'));
+      expect(res.status).toBe(503);
+      expect((await res.json()).error).toBe('replay_store_unavailable');
+    } finally {
+      (globalThis as unknown as { __nonceDbDown?: boolean }).__nonceDbDown = false;
+    }
   });
 
   it('accepts a genuine retry with a fresh nonce', async () => {
