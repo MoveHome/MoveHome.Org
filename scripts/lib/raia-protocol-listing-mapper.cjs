@@ -21,6 +21,8 @@
 
 "use strict";
 
+const { sanitizeDescription } = require("./sanitize-description.cjs");
+
 // v0.1 → v0.2 backwards compatibility for service_type, plus the A2A
 // transaction_type vocabulary flat cards send in its place (EA sends LETTINGS
 // for a letting of the property → long_term; SALES is a disposal → sale).
@@ -201,6 +203,12 @@ function normaliseListing(listing, ctx) {
 
   // ── Media ───────────────────────────────────────────────────────────────
   const mediaBlock = asObjectOrNull(listing.media);
+  if (mediaBlock && listing.video_url && !mediaBlock.video_url) {
+    mediaBlock.video_url = listing.video_url;
+  }
+  if (mediaBlock && listing.tour_360_url && !mediaBlock.tour_360_url) {
+    mediaBlock.tour_360_url = listing.tour_360_url;
+  }
   const { url: photo_url, count: photo_count } = pickPhotoUrl(mediaBlock);
 
   // ── Status (v0.2 listing_status, or v0.3 upper-case status) ─────────────
@@ -227,7 +235,7 @@ function normaliseListing(listing, ctx) {
     raia_schema_version:  asTrimmedStringOrNull(ctx.schema_version) ?? "0.2",
 
     headline:              asTrimmedStringOrNull(listing.headline),
-    marketing_description: asTrimmedStringOrNull(listing.marketing_description),
+    marketing_description: sanitizeDescription(asTrimmedStringOrNull(listing.marketing_description)),
 
     property_type:    normalisePropertyType(listing.property_type),
     service_type,
