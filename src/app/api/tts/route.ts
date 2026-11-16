@@ -119,7 +119,7 @@ async function readLease(
 // taken in. Creating a name is atomic (create-if-absent), so contenders race on
 // one key and exactly one wins; releasing deletes a name only its owner could
 // hold — no read-then-delete, and no upsert takeover where two winners exist.
-export function leasePath(
+function leasePath(
   lang: TtsLang,
   gender: VoiceGender,
   raia_id: string,

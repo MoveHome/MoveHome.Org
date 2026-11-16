@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { GET, leasePath } from '@/app/api/tts/route';
+import { GET } from '@/app/api/tts/route';
 import { TTS_LANGS, cachePath, resolveLang, scriptHash, voiceFor, type TtsLang, type VoiceGender } from '@/lib/tts';
 import { buildPropertyDescriptionWithCta, ttsLocaleOf } from '@/lib/property-card';
 import type { Listing } from '@/lib/types';
@@ -323,8 +323,8 @@ describe('GET /api/tts', () => {
     state.listing = l;
     const fetchMock = providerOk();
     const hash = scriptHash(buildPropertyDescriptionWithCta(l, 'Acme Estates'));
-    // No expiry: the holder is alive.
-    const heldLease = leasePath('en-GB', 'female', l.raia_id, hash);
+    const now = Date.now();
+    const heldLease = `tts/_locks/en-GB/female/${l.raia_id}-${hash}/${Math.floor(now / 30_000)}`;
 
     state.files.set(heldLease, new Blob([JSON.stringify({ owner: 'other-worker', expiresAt: Date.now() + 60_000 })]));
 
