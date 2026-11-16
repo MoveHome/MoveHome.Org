@@ -6,6 +6,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Listing } from '@/lib/types';
+import DescriptionToggleButton from './DescriptionToggleButton';
 import {
   isVacant,
   plainText,
@@ -26,6 +27,9 @@ interface Props {
   onPass: () => void;
   onRewind: () => void;
   onSelect: (id: string) => void;
+  drawer: boolean;
+  onDrawerChange: (open: boolean) => void;
+  keysEnabled?: boolean;
 }
 
 type Slide = { kind: 'video' | 'photo'; url: string };
@@ -57,14 +61,17 @@ export default function TinderPropertyCard({
   onToggleSave,
   onPass,
   onRewind,
-  onSelect
+  onSelect,
+  drawer,
+  onDrawerChange,
+  keysEnabled = true
 }: Props) {
   const slides = useMemo(() => slidesOf(listing), [listing]);
   const [slide, setSlide] = useState(0);
   const [sound, setSound] = useState(false);
-  const [drawer, setDrawer] = useState(false);
   const [sheet, setSheet] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
   const swiped = useRef(false);
   const drag = useRef<{ x: number; y: number } | null>(null);
 
@@ -78,7 +85,26 @@ export default function TinderPropertyCard({
   const next = () => setSlide((s) => Math.min(slides.length - 1, s + 1));
   const prev = () => setSlide((s) => Math.max(0, s - 1));
 
-  function speak() {
+  // Photo arrows only — property up/down live on the deck so they survive the card.
+  useEffect(() => {
+    if (drawer || !keysEnabled) return;
+    function onKey(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+      if (e.key === 'ArrowRight') {
+        e.preventDefault();
+        next();
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault();
+        prev();
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [drawer, keysEnabled, slides.length]);
+
+  // Local browser voice: the fallback when the TTS endpoint has no key/audio.
+  function speakLocal() {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
     const l = listing;
     const beds = l.bedrooms != null ? `${l.bedrooms} bedroom` : 'studio';
@@ -91,6 +117,15 @@ export default function TinderPropertyCard({
     const u = new SpeechSynthesisUtterance(text);
     u.rate = 1;
     window.speechSynthesis.speak(u);
+  }
+
+  // ElevenLabs narration of the sanitised description, cached by the endpoint.
+  function narrate() {
+    const audio = (audioRef.current ??= new Audio());
+    window.speechSynthesis?.cancel();
+    audio.onerror = speakLocal;
+    audio.src = `/api/tts?raia_id=${encodeURIComponent(listing.raia_id)}`;
+    audio.play().catch(speakLocal);
   }
 
   const vacant = isVacant(listing);
@@ -119,13 +154,18 @@ export default function TinderPropertyCard({
           if (!s) return;
           const dx = e.clientX - s.x;
           const dy = e.clientY - s.y;
-          if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy)) {
-            if (dy < -80) setDrawer(true);
+          // Vertical = property, horizontal = photo. Drawer only opens from the
+          // ringed arrow (or i/Enter) so the two gestures stop fighting.
+          if (Math.abs(dy) > 60 && Math.abs(dy) > Math.abs(dx)) {
+            swiped.current = true;
+            if (dy < 0) onPass();
+            else onRewind();
             return;
           }
+          if (Math.abs(dx) < 60) return;
           swiped.current = true;
-          if (dx < 0) onPass();
-          else onRewind();
+          if (dx < 0) next();
+          else prev();
         }}
       >
         {slides.length === 0 && (
@@ -251,7 +291,7 @@ export default function TinderPropertyCard({
           <Action label="Pass" onClick={onPass} size={56}>
             <PassIcon />
           </Action>
-          <Action label="Voice summary" onClick={speak} size={44}>
+          <Action label="Voice summary" onClick={narrate} size={44}>
             <SpeakerIcon size={22} color="#38bdf8" />
           </Action>
           <Action
@@ -268,58 +308,25 @@ export default function TinderPropertyCard({
         </div>
       </div>
 
-      {/* ↑ info button → drawer */}
-      <button
-        type="button"
-        onClick={() => setDrawer(true)}
-        aria-label="More about this property"
-        className="absolute right-3 top-1/2 z-20 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border-2 border-orange-500 bg-zinc-900/90 text-white shadow-[0_0_0_4px_rgba(249,115,22,0.25)] backdrop-blur transition-transform hover:scale-105"
-      >
-        <svg
-          width="20"
-          height="20"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.4"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-        >
-          <line x1="12" y1="19" x2="12" y2="5" />
-          <polyline points="5 12 12 5 19 12" />
-        </svg>
-      </button>
+      {/* ↑ info button → drawer (the only way in) */}
+      <div className="absolute right-3 top-1/2 z-20 -translate-y-1/2">
+        <DescriptionToggleButton open={false} onClick={() => onDrawerChange(true)} />
+      </div>
 
       {/* ── State 2: expanded description drawer ─────────────────────── */}
       {drawer && (
-        <div className="absolute inset-0 z-30 flex flex-col overflow-y-auto bg-neutral-950">
-          <header className="sticky top-0 z-10 flex items-center justify-between gap-3 bg-neutral-950/95 px-4 py-3 backdrop-blur">
+        <div className="absolute inset-0 z-30 flex flex-col overflow-y-auto bg-neutral-950 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <header className="sticky top-0 z-10 flex items-start justify-between gap-3 bg-neutral-950/95 px-4 py-3 backdrop-blur">
             <div className="min-w-0">
               <p className="truncate text-sm font-bold">
                 {priceLabel(listing)} · {titleOf(listing)}
               </p>
               <p className="truncate text-[11px] text-white/50">{areaOf(listing)}</p>
+              <div className="mt-1.5">
+                <RefPill id={listing.raia_id} />
+              </div>
             </div>
-            <button
-              type="button"
-              onClick={() => setDrawer(false)}
-              aria-label="Collapse description"
-              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white text-base font-bold text-black"
-            >
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.6"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <line x1="12" y1="5" x2="12" y2="19" />
-                <polyline points="19 12 12 19 5 12" />
-              </svg>
-            </button>
+            <DescriptionToggleButton open onClick={() => onDrawerChange(false)} />
           </header>
 
           <div className="relative h-40 shrink-0">
@@ -343,6 +350,9 @@ export default function TinderPropertyCard({
 
           <div className="space-y-3 p-3">
             <Card title="Lease & Availability">
+              <div className="mb-2">
+                <RefPill id={listing.raia_id} />
+              </div>
               <div className="flex flex-wrap gap-1.5">
                 <Chip>{listing.service_type.replace(/_/g, ' ')}</Chip>
                 <Chip>{statusLabel(listing)}</Chip>
@@ -381,7 +391,7 @@ export default function TinderPropertyCard({
                     type="button"
                     onClick={() => {
                       onSelect(s.raia_id);
-                      setDrawer(false);
+                      onDrawerChange(false);
                     }}
                     className="flex w-full items-center gap-3 rounded-xl p-1.5 text-left hover:bg-white/5"
                   >
@@ -545,6 +555,34 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
 function Chip({ children }: { children: React.ReactNode }) {
   return (
     <span className="rounded-full bg-white/10 px-2.5 py-1 text-[11px] capitalize text-white/80">{children}</span>
+  );
+}
+
+// Agent-facing reference id with one-click copy; the label stays monospaced so
+// it reads as an identifier, not prose.
+function RefPill({ id }: { id: string }) {
+  const [copied, setCopied] = useState(false);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(id);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked (insecure context) — id stays visible to copy by hand */
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title="Copy reference"
+      className="inline-flex items-center gap-1.5 rounded-full border border-white/15 bg-white/5 px-2.5 py-1 font-mono text-[10px] tracking-tight text-white/70 hover:border-emerald-400 hover:text-white"
+    >
+      REF: {id}
+      <span className="font-sans font-bold text-emerald-400">{copied ? 'Copied ✓' : '⧉'}</span>
+    </button>
   );
 }
 

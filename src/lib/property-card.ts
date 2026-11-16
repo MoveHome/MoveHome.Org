@@ -76,6 +76,37 @@ export function clusterOf(l: Listing): ClusterId {
   return 'other';
 }
 
+// Plain-English place labels. un_locode gives the city; the suburb is the leaf
+// users actually type. Codes never leak into the UI.
+const CITY_BY_LOCODE: Record<string, string> = {
+  GBLON: 'London',
+  GBMAN: 'Manchester',
+  GBRDG: 'Reading',
+  THBKK: 'Bangkok'
+};
+
+export function cityOf(l: Listing): string | null {
+  const code = (l.un_locode ?? '').toUpperCase();
+  if (CITY_BY_LOCODE[code]) return CITY_BY_LOCODE[code];
+  if (code.startsWith('TH') || l.jurisdiction === 'TH' || l.currency === 'THB') return 'Thailand';
+  if (code.startsWith('GB') || l.jurisdiction === 'GB' || l.currency === 'GBP') return 'UK';
+  return null;
+}
+
+// Every label this listing can be found by: city and suburb.
+export function locationsOf(l: Listing): string[] {
+  return [cityOf(l), l.suburb?.trim() || null].filter((x): x is string => Boolean(x));
+}
+
+// Monthly-equivalent price in GBP for the budget filter.
+// shortcut: fixed 45 THB/GBP, use a rate table when clients care about FX drift.
+export function priceGbp(l: Listing): number | null {
+  const p =
+    l.service_type === 'sale' ? l.asking_price : (l.rent_pcm ?? (l.daily_rate ? l.daily_rate * 30 : null));
+  if (p == null) return null;
+  return l.currency === 'THB' ? Math.round(p / 45) : p;
+}
+
 export function viewingSlots(now: Date = new Date()): { iso: string; label: string }[] {
   const out: { iso: string; label: string }[] = [];
   for (let d = 1; d <= 3; d++) {
