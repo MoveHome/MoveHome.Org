@@ -83,9 +83,9 @@ whether a property lets or sells. Those costs are ultimately passed on to
 tenants and home movers — increasing the cost of renting and moving home for
 everyone.
 
-MoveHome.org exists to change that. Free to list. A small success fee funds
-the platform only when a deal completes. The mission: remove the toll booth
-from housing and return that value to the people who need it most.
+MoveHome.org exists to change that. Free to list, with £0 referral fee, £0 deal
+commission and £0 client money held. The mission: remove the toll booth from
+housing and return that value to the people who need it most.
 
 Move Home Organisation CIC is constituted to serve this mission permanently —
 profits cannot be extracted, assets are locked to the community benefit purpose.
