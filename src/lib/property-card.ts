@@ -94,3 +94,9 @@ export function viewingSlots(now: Date = new Date()): { iso: string; label: stri
 export function plainText(html: string | null): string {
   return (html ?? '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
 }
+
+// A card with no video and no image renders a dead "No media" stage, so rich
+// cards are ranked above bare ones.
+export function hasMedia(l: Listing): boolean {
+  return Boolean(l.video_url || l.photos?.length || l.photo_url || l.featured_image_url);
+}

@@ -1,4 +1,5 @@
 import { getSupabase } from './supabase';
+import { hasMedia } from './property-card';
 import type {
   Agent,
   JurisdictionExtensions,
@@ -160,6 +161,11 @@ export async function searchListings(
     .is('duplicate_of', null)
     .eq('is_outlier', false)
     .eq('visibility', 'public')
+    // MCP write-pilot fixtures (prop-gb-mcptest-* / org-gb-mcptest) are test
+    // data, never public listings. getListingByRaiaId stays unfiltered so the
+    // MCP must-fail/pilot suite can still fetch the fence by id.
+    .not('raia_id', 'like', '%mcptest%')
+    .or('agent_id.is.null,agent_id.neq.org-gb-mcptest')
     .order('synced_at', { ascending: false });
 
   if (params.un_locode) query = query.eq('un_locode', params.un_locode);
@@ -179,8 +185,13 @@ export async function searchListings(
     console.error('[searchListings]', error.message);
     return { results: [], total: 0 };
   }
+  // Re-rank the fetched page so a media-less fixture never lands first; the
+  // synced_at order inside each group is preserved by the stable sort.
+  const results = (data ?? [])
+    .map((r) => rowToListing(r as ExternalListingRow))
+    .sort((a, b) => Number(hasMedia(b)) - Number(hasMedia(a)));
   return {
-    results: (data ?? []).map((r) => rowToListing(r as ExternalListingRow)),
+    results,
     total: count ?? 0
   };
 }
@@ -217,7 +228,9 @@ export async function getMapPins(params: SearchParams = {}): Promise<MapPin[]> {
     .eq('is_outlier', false)
     .eq('visibility', 'public')
     .not('latitude', 'is', null)
-    .not('longitude', 'is', null);
+    .not('longitude', 'is', null)
+    .not('raia_id', 'like', '%mcptest%')
+    .or('agent_id.is.null,agent_id.neq.org-gb-mcptest');
 
   if (params.un_locode) query = query.eq('un_locode', params.un_locode);
   if (params.service_type) query = query.eq('service_type', params.service_type);

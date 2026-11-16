@@ -68,6 +68,13 @@ export default function PropertyDeck({
       {/* Filter & location cluster pill bar */}
       <header className="shrink-0 px-3 pb-1 pt-3">
         <div className="mx-auto flex w-full max-w-[420px] items-center gap-2 overflow-x-auto pb-1 [scrollbar-width:none]">
+          {/* Absolute link: a relative / would loop through the host rewrite. */}
+          <a
+            href="https://movehome.org"
+            className="shrink-0 whitespace-nowrap rounded-full border border-[var(--border)] bg-[var(--bg-card)] px-3 py-1.5 text-xs font-semibold text-[var(--text-dim)]"
+          >
+            ← movehome.org
+          </a>
           <button
             type="button"
             onClick={() => setFilterOpen((v) => !v)}
