@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import type { Listing } from '../lib/types';
 import {
   buildPropertyDescriptionWithCta,
+  catalogCities,
   cityOf,
   countryOf,
   isVacant,
   isYouTubeUrl,
   locationsOf,
   priceGbp,
+  priceMyr,
   priceThb,
   resolveDefaultCountry,
   specGroups,
@@ -69,12 +71,33 @@ describe('property-card helpers', () => {
     expect(locationsOf(listing({ un_locode: 'GBLON', suburb: 'Fulham' }))).not.toContain('GBLON');
   });
 
+  it('covers all three CRAM jurisdictions', () => {
+    expect(resolveDefaultCountry('MY')).toBe('MY');
+    expect(resolveDefaultCountry('my')).toBe('MY');
+    expect(countryOf(listing({ currency: 'MYR' }))).toBe('MY');
+    expect(cityOf(listing({ un_locode: 'MYKUL' }))).toBe('Kuala Lumpur');
+    expect(cityOf(listing({ un_locode: 'GBXYZ' }))).toBe('UK');
+    // Pickable before any listing exists in that city, alphabetical.
+    const gb = catalogCities('GB');
+    expect(gb).toContain('London');
+    expect(gb).toEqual([...gb].sort((a, b) => a.localeCompare(b)));
+  });
+
+  it('calculates priceMyr in native MYR or GBP fallback', () => {
+    expect(priceMyr(listing({ rent_pcm: 4500, currency: 'MYR' }))).toBe(4500);
+    expect(priceMyr(listing({ rent_pcm: 1000, currency: 'GBP' }))).toBe(5600);
+    expect(priceMyr(listing({ service_type: 'short_term', daily_rate: 150, currency: 'MYR' }))).toBe(
+      4500
+    );
+  });
+
   it('converts THB to a GBP monthly figure for the budget filter', () => {
     expect(priceGbp(listing({ rent_pcm: 2000, currency: 'GBP' }))).toBe(2000);
     expect(priceGbp(listing({ rent_pcm: 45_000, currency: 'THB' }))).toBe(1000);
     expect(priceGbp(listing({ service_type: 'sale', asking_price: 500_000, currency: 'GBP' }))).toBe(
       500_000
     );
+    expect(priceGbp(listing({ rent_pcm: 33_600, currency: 'MYR' }))).toBe(6000);
   });
 });
 

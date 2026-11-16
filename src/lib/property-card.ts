@@ -61,15 +61,17 @@ export function statusLabel(l: Listing, now: Date = new Date()): string {
   return l.listing_status.replace(/_/g, ' ');
 }
 
-export function countryOf(l: Listing): 'GB' | 'TH' | null {
+export function countryOf(l: Listing): CatalogCountry | null {
   const locode = (l.un_locode ?? '').toUpperCase();
   if (l.jurisdiction === 'TH' || locode.startsWith('TH') || l.currency === 'THB') return 'TH';
+  if (l.jurisdiction === 'MY' || locode.startsWith('MY') || l.currency === 'MYR') return 'MY';
   if (l.jurisdiction === 'GB' || locode.startsWith('GB') || l.currency === 'GBP') return 'GB';
   return null;
 }
 
-export function resolveDefaultCountry(ipCountry: string | null | undefined): 'GB' | 'TH' {
-  return ipCountry?.toUpperCase() === 'TH' ? 'TH' : 'GB';
+export function resolveDefaultCountry(ipCountry: string | null | undefined): CatalogCountry {
+  const cc = ipCountry?.toUpperCase();
+  return cc === 'TH' || cc === 'MY' ? cc : 'GB';
 }
 
 export function priceThb(l: Listing): number | null {
@@ -78,6 +80,15 @@ export function priceThb(l: Listing): number | null {
   if (p != null && l.currency === 'THB') return p;
   const gbp = priceGbp(l);
   return gbp != null ? Math.round(gbp * 45) : null;
+}
+
+// Monthly-equivalent price in MYR for the Malaysia budget filter.
+export function priceMyr(l: Listing): number | null {
+  const p =
+    l.service_type === 'sale' ? l.asking_price : (l.rent_pcm ?? (l.daily_rate ? l.daily_rate * 30 : null));
+  if (p != null && l.currency === 'MYR') return p;
+  const gbp = priceGbp(l);
+  return gbp != null ? Math.round(gbp * 5.6) : null;
 }
 
 export type ClusterId = 'all' | 'bkk' | 'lon' | 'other';
@@ -103,19 +114,129 @@ export function clusterOf(l: Listing): ClusterId {
   return 'other';
 }
 
+// Reference UN/LOCODE places per CRAM jurisdiction, alphabetical by city name.
+// Residential/commercial towns only — the ~3,000 non-residential port and
+// rail-depot codes would drown the picker.
+export type CatalogCountry = 'GB' | 'TH' | 'MY';
+
+export const UN_LOCODE_CATALOG: Record<CatalogCountry, readonly { code: string; city: string }[]> = {
+  GB: [
+    { code: 'GBABD', city: 'Aberdeen' },
+    { code: 'GBBAT', city: 'Bath' },
+    { code: 'GBBEL', city: 'Belfast' },
+    { code: 'GBBHX', city: 'Birmingham' },
+    { code: 'GBBMT', city: 'Bournemouth' },
+    { code: 'GBBRD', city: 'Bradford' },
+    { code: 'GBBHM', city: 'Brighton' },
+    { code: 'GBBRS', city: 'Bristol' },
+    { code: 'GBCBG', city: 'Cambridge' },
+    { code: 'GBCDF', city: 'Cardiff' },
+    { code: 'GBCHE', city: 'Cheltenham' },
+    { code: 'GBCER', city: 'Chester' },
+    { code: 'GBCOL', city: 'Colchester' },
+    { code: 'GBCOV', city: 'Coventry' },
+    { code: 'GBCRN', city: 'Croydon' },
+    { code: 'GBDER', city: 'Derby' },
+    { code: 'GBDUN', city: 'Dundee' },
+    { code: 'GBEDH', city: 'Edinburgh' },
+    { code: 'GBEXE', city: 'Exeter' },
+    { code: 'GBGLW', city: 'Glasgow' },
+    { code: 'GBGLO', city: 'Gloucester' },
+    { code: 'GBGUI', city: 'Guildford' },
+    { code: 'GBHUD', city: 'Huddersfield' },
+    { code: 'GBINV', city: 'Inverness' },
+    { code: 'GBIPS', city: 'Ipswich' },
+    { code: 'GBKGN', city: 'Kingston upon Thames' },
+    { code: 'GBLDS', city: 'Leeds' },
+    { code: 'GBLEI', city: 'Leicester' },
+    { code: 'GBLIV', city: 'Liverpool' },
+    { code: 'GBLON', city: 'London' },
+    { code: 'GBMAN', city: 'Manchester' },
+    { code: 'GBMKH', city: 'Milton Keynes' },
+    { code: 'GBNCL', city: 'Newcastle upon Tyne' },
+    { code: 'GBNWI', city: 'Norwich' },
+    { code: 'GBNOT', city: 'Nottingham' },
+    { code: 'GBOXF', city: 'Oxford' },
+    { code: 'GBPBO', city: 'Peterborough' },
+    { code: 'GBPLY', city: 'Plymouth' },
+    { code: 'GBPME', city: 'Portsmouth' },
+    { code: 'GBRDG', city: 'Reading' },
+    { code: 'GBSHF', city: 'Sheffield' },
+    { code: 'GBSLH', city: 'Slough' },
+    { code: 'GBSOU', city: 'Southampton' },
+    { code: 'GBSTK', city: 'Stoke-on-Trent' },
+    { code: 'GBSWA', city: 'Swansea' },
+    { code: 'GBSWD', city: 'Swindon' },
+    { code: 'GBWTF', city: 'Watford' },
+    { code: 'GBWOK', city: 'Woking' },
+    { code: 'GBWOL', city: 'Wolverhampton' },
+    { code: 'GBYRK', city: 'York' }
+  ],
+  TH: [
+    { code: 'THAYT', city: 'Ayutthaya' },
+    { code: 'THBKK', city: 'Bangkok' },
+    { code: 'THCNX', city: 'Chiang Mai' },
+    { code: 'THCEI', city: 'Chiang Rai' },
+    { code: 'THHDY', city: 'Hat Yai' },
+    { code: 'THHHQ', city: 'Hua Hin' },
+    { code: 'THKKC', city: 'Khon Kaen' },
+    { code: 'THUSM', city: 'Koh Samui' },
+    { code: 'THKBV', city: 'Krabi' },
+    { code: 'THNMA', city: 'Nakhon Ratchasima' },
+    { code: 'THNAN', city: 'Nan' },
+    { code: 'THPYX', city: 'Pattaya' },
+    { code: 'THHKT', city: 'Phuket' },
+    { code: 'THRAY', city: 'Rayong' },
+    { code: 'THSRT', city: 'Surat Thani' },
+    { code: 'THTRG', city: 'Trang' },
+    { code: 'THUBP', city: 'Ubon Ratchathani' },
+    { code: 'THUDN', city: 'Udon Thani' }
+  ],
+  MY: [
+    { code: 'MYAOR', city: 'Alor Setar' },
+    { code: 'MYBTU', city: 'Bintulu' },
+    { code: 'MYCYJ', city: 'Cyberjaya' },
+    { code: 'MYPEN', city: 'George Town' },
+    { code: 'MYIPH', city: 'Ipoh' },
+    { code: 'MYJHB', city: 'Johor Bahru' },
+    { code: 'MYKGR', city: 'Kangar' },
+    { code: 'MYKBR', city: 'Kota Bharu' },
+    { code: 'MYBKI', city: 'Kota Kinabalu' },
+    { code: 'MYKUL', city: 'Kuala Lumpur' },
+    { code: 'MYKUA', city: 'Kuantan' },
+    { code: 'MYKCH', city: 'Kuching' },
+    { code: 'MYLBU', city: 'Labuan' },
+    { code: 'MYLGK', city: 'Langkawi' },
+    { code: 'MYMKZ', city: 'Malacca' },
+    { code: 'MYMYY', city: 'Miri' },
+    { code: 'MYPJA', city: 'Petaling Jaya' },
+    { code: 'MYPUT', city: 'Putrajaya' },
+    { code: 'MYSDK', city: 'Sandakan' },
+    { code: 'MYSHA', city: 'Shah Alam' },
+    { code: 'MYSBW', city: 'Sibu' },
+    { code: 'MYSZG', city: 'Subang Jaya' },
+    { code: 'MYTPG', city: 'Taiping' }
+  ]
+};
+
 // Plain-English place labels. un_locode gives the city; the suburb is the leaf
 // users actually type. Codes never leak into the UI.
-const CITY_BY_LOCODE: Record<string, string> = {
-  GBLON: 'London',
-  GBMAN: 'Manchester',
-  GBRDG: 'Reading',
-  THBKK: 'Bangkok'
-};
+const CITY_BY_LOCODE: Record<string, string> = Object.fromEntries(
+  Object.values(UN_LOCODE_CATALOG)
+    .flat()
+    .map(({ code, city }) => [code, city])
+);
+
+// City names a user can pick for a country before any listing exists there.
+export function catalogCities(country: CatalogCountry): string[] {
+  return UN_LOCODE_CATALOG[country].map((c) => c.city).sort((a, b) => a.localeCompare(b));
+}
 
 export function cityOf(l: Listing): string | null {
   const code = (l.un_locode ?? '').toUpperCase();
   if (CITY_BY_LOCODE[code]) return CITY_BY_LOCODE[code];
   if (code.startsWith('TH') || l.jurisdiction === 'TH' || l.currency === 'THB') return 'Thailand';
+  if (code.startsWith('MY') || l.jurisdiction === 'MY' || l.currency === 'MYR') return 'Malaysia';
   if (code.startsWith('GB') || l.jurisdiction === 'GB' || l.currency === 'GBP') return 'UK';
   return null;
 }
@@ -131,7 +252,9 @@ export function priceGbp(l: Listing): number | null {
   const p =
     l.service_type === 'sale' ? l.asking_price : (l.rent_pcm ?? (l.daily_rate ? l.daily_rate * 30 : null));
   if (p == null) return null;
-  return l.currency === 'THB' ? Math.round(p / 45) : p;
+  if (l.currency === 'THB') return Math.round(p / 45);
+  if (l.currency === 'MYR') return Math.round(p / 5.6);
+  return p;
 }
 
 export function viewingSlots(now: Date = new Date()): { iso: string; label: string }[] {

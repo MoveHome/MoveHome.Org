@@ -6,13 +6,24 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Listing } from '@/lib/types';
 import PropertyCard from './PropertyCard';
-import { countryOf, locationsOf, priceGbp, priceThb, clusterOf } from '@/lib/property-card';
+import {
+  catalogCities,
+  countryOf,
+  locationsOf,
+  priceGbp,
+  priceMyr,
+  priceThb,
+  clusterOf
+} from '@/lib/property-card';
 
 const SAVED_KEY = 'movehome.saved.v1';
 
 type Tab = 'explore' | 'saved' | 'viewings';
 type Service = 'all' | 'long_term' | 'short_term' | 'sale';
-type Country = 'GB' | 'TH' | 'ALL';
+type Country = 'GB' | 'TH' | 'MY';
+
+// Pinned first in the Locations picker; selecting it clears the filter.
+const ALL_LOCATIONS = 'All Locations';
 
 const SERVICE_FILTERS: [Service, string][] = [
   ['all', 'All'],
@@ -33,6 +44,13 @@ const BUDGETS_THB: [number, string][] = [
   [20000, '≤ ฿20,000'],
   [40000, '≤ ฿40,000'],
   [80000, '≤ ฿80,000']
+];
+
+const BUDGETS_MYR: [number, string][] = [
+  [0, 'Any'],
+  [3000, '≤ RM 3,000'],
+  [6000, '≤ RM 6,000'],
+  [12000, '≤ RM 12,000']
 ];
 
 const BEDROOMS: [number, string][] = [
@@ -109,14 +127,13 @@ export default function PropertyDeck({
     });
   }
 
-  // Scoped location options based on active country filter
+  // Country's reference cities, merged with the suburbs live listings actually use.
   const locationOptions = useMemo(() => {
     const seen = new Map<string, string>();
+    for (const city of catalogCities(country)) seen.set(city.toLowerCase(), city);
     for (const l of listings) {
-      if (country !== 'ALL') {
-        const c = countryOf(l);
-        if (c && c !== country) continue;
-      }
+      const c = countryOf(l);
+      if (c && c !== country) continue;
       for (const loc of locationsOf(l)) {
         seen.set(loc.toLowerCase(), loc);
       }
@@ -126,22 +143,24 @@ export default function PropertyDeck({
 
   const suggestions = useMemo(() => {
     const q = modalLocQuery.trim().toLowerCase();
-    return locationOptions
-      .filter((o) => !locations.includes(o) && (!q || o.toLowerCase().includes(q)))
-      .slice(0, 8);
+    const cities = locationOptions.filter(
+      (o) => !locations.includes(o) && (!q || o.toLowerCase().includes(q))
+    );
+    const all = !q || ALL_LOCATIONS.toLowerCase().includes(q) ? [ALL_LOCATIONS] : [];
+    return [...all, ...cities].slice(0, 8);
   }, [locationOptions, locations, modalLocQuery]);
+
+  function pickLocation(opt: string) {
+    setLocations((prev) => (opt === ALL_LOCATIONS ? [] : [...prev, opt]));
+    setModalLocQuery('');
+    modalLocSearchRef.current?.focus();
+  }
 
   const handleCountryChange = (newCountry: Country) => {
     setCountry(newCountry);
     setBudget(0);
-    if (newCountry !== 'ALL') {
-      const validLocs = new Set(
-        listings
-          .filter((l) => countryOf(l) === newCountry)
-          .flatMap((l) => locationsOf(l).map((loc) => loc.toLowerCase()))
-      );
-      setLocations((prev) => prev.filter((loc) => validLocs.has(loc.toLowerCase())));
-    }
+    setLocations([]);
+    setModalLocQuery('');
   };
 
   const activeCount =
@@ -158,10 +177,8 @@ export default function PropertyDeck({
       if (tab === 'saved') return saved.includes(l.raia_id);
       if (tab === 'viewings') return false;
 
-      if (country !== 'ALL') {
-        const c = countryOf(l);
-        if (c && c !== country) return false;
-      }
+      const c = countryOf(l);
+      if (c && c !== country) return false;
 
       if (
         locations.length &&
@@ -171,7 +188,7 @@ export default function PropertyDeck({
       }
       if (service !== 'all' && l.service_type !== service) return false;
       if (budget > 0 && l.service_type !== 'sale') {
-        const price = country === 'TH' ? priceThb(l) : priceGbp(l);
+        const price = country === 'TH' ? priceThb(l) : country === 'MY' ? priceMyr(l) : priceGbp(l);
         // Unknown price stays visible — hiding it silently loses listings.
         if (price != null && price > budget) return false;
       }
@@ -247,7 +264,7 @@ export default function PropertyDeck({
         ? ['No viewings booked yet', 'Book one from any card.']
         : ['No properties match', 'Try removing a location or filter.'];
 
-  const budgets = country === 'TH' ? BUDGETS_THB : BUDGETS_GBP;
+  const budgets = country === 'TH' ? BUDGETS_THB : country === 'MY' ? BUDGETS_MYR : BUDGETS_GBP;
 
   return (
     <div className="flex h-[100dvh] w-full flex-col bg-[#09090b] text-zinc-100">
@@ -441,9 +458,9 @@ export default function PropertyDeck({
                   aria-label="Country"
                   className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-semibold text-zinc-100 outline-none focus:border-emerald-500"
                 >
-                  <option value="GB">United Kingdom</option>
+                  <option value="MY">Malaysia</option>
                   <option value="TH">Thailand</option>
-                  <option value="ALL">All Countries</option>
+                  <option value="GB">United Kingdom</option>
                 </select>
               </Section>
 
@@ -474,8 +491,7 @@ export default function PropertyDeck({
                       onBlur={() => setTimeout(() => setModalLocPicking(false), 120)}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' && suggestions[0]) {
-                          setLocations((prev) => [...prev, suggestions[0]]);
-                          setModalLocQuery('');
+                          pickLocation(suggestions[0]);
                           e.preventDefault();
                         } else if (e.key === 'Backspace' && !modalLocQuery && locations.length) {
                           setLocations((prev) => prev.slice(0, -1));
@@ -494,11 +510,7 @@ export default function PropertyDeck({
                           <button
                             type="button"
                             onMouseDown={(e) => e.preventDefault()}
-                            onClick={() => {
-                              setLocations((prev) => [...prev, opt]);
-                              setModalLocQuery('');
-                              modalLocSearchRef.current?.focus();
-                            }}
+                            onClick={() => pickLocation(opt)}
                             className="block w-full px-3 py-1.5 text-left text-xs font-semibold text-zinc-300 hover:bg-emerald-500/15 hover:text-emerald-300"
                           >
                             {opt}
