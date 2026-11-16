@@ -1,0 +1,119 @@
+RED TEAM — Google/Gemini GTM call, Wed 11 Nov 15:30 UK (15 min)
+Re-probed live 2026-11-10 21:05-21:15 UTC. Nothing below is inherited from the brief.
+
+FINDINGS THAT CHANGE THE PLAN
+- MH search GBLON: 200, state "completed", 36 rows, every price null AND every
+  postcode_district null. Silent, not broken.
+- EA GET /api/a2a -> 405 (card not fetchable by GET).
+- Schemas not interchangeable. MH: {"un_locode":"GBLON"}. EA: same plus
+  transaction_type SALES|LETTINGS. MH's body sent to EA fails the task, HTTP 200.
+- EA SALES -> 0 results (GBLON, GBMAN). EA LETTINGS -> 36 rows, asking_rent_pcm
+  2882 GBP, district EC1V. So "EA carries prices correctly" holds for LETTINGS only.
+  The proposed fallback leg is half-verified.
+- Envelopes diverge: MH {listings:[{price:{}}]}, EA {properties:[{asking_rent_pcm}]}.
+  Same protocol, two dialects.
+- Errors are HTTP 200 with result.status.state="failed". Status codes lie.
+- MH card declares skills with empty inputSchema; EA card advertises schedule_viewing,
+  absent from our own brief. Card != implementation.
+
+Q1 — RANK: (b) recorded 60-90s capture > (c) annotated screenshots > (a) live
+terminal > (d) concept only.
+Asymmetry: a GTM lead buys a story he must retell without you present. A recording's
+downside is bounded ("can I see it live?" — yes, on the technical follow-up). A live
+terminal's downside is uncapped on a 15-minute clock with no recovery time; one
+failed call reads as "not production-ready" and there is no second act. Concept-only
+is second-worst: he asked a specific technical question, and refusing to show
+anything wastes the asset you actually have — two public endpoints.
+SHIP: 2 min concept, 90s recording, screenshots as leave-behind. No terminal.
+
+Q2 — IF LIVE. One pre-written script, JSON bodies in files (never typed), pre-run at
+T-5, output tee'd to a file also open in an editor so a freeze degrades to a read.
+Failure modes: wrong window shared; unreadable font at 720p; scrollback hides the
+punchline; Vercel cold start/DNS; laptop sleep; HDMI switch kills the tab; "null"
+read aloud as a price; wrong un_locode; SALES returning 0. Mitigations: 1080p, 18pt,
+one command per keystroke, both legs pre-warmed, output pre-scrolled to the answer,
+identical PNG on standby, never call SALES. Pre-recorded is strictly better here;
+live only wins when the counterparty is an engineer who will interrogate the wire.
+
+Q3 — DO NOT FIX TONIGHT. Price and postcode_district are null on the same rows: a
+derivation/ingestion fault, not a default. Two hours buys an unverified fix on data
+you will quote tomorrow and cannot retract.
+Ship only if all six: read-only backfill with dry-run diff on the same 36 raia_ids;
+100% non-null rent_pcm + district for LETTINGS; row count still 36; re-probe passes
+identically; snapshot for rollback; merged and verified by 14:00, not 15:30.
+Else: demo EA LETTINGS (prices real) and name the CIC provenance gap once, plainly.
+
+Q4 — "TECHNICAL" = "can I hand this to an engineer without looking foolish, and
+introduce you without qualifying it." Registers: agent card JSON, a 10-line
+copy-pasteable call, a public URL answering in <300ms, one-page skill/param table, a
+response screenshot. Wastes attention: architecture diagrams, RLS, model routing,
+cost per token, Spark region constraints, roadmap. Best artefact: call and response
+side by side, one page.
+
+Q5 — SAY NOT: production-ready, enterprise-grade, at scale, partnership, "coming
+back to Google", traction numbers, any Vertex/Gemini Enterprise date. Don't imply
+Google endorsement, granted credits, or a Gemini-based runtime (it isn't). Don't
+call the price defect a small bug — name it once as a known provenance gap.
+ASK FOR: Startups credits tier; a Cloud CE intro for a 30-min architecture review
+(the real prize — a named engineer converts a GTM call into a technical
+relationship); co-marketing/showcase slot; Gemini Enterprise design-partner
+consideration for multi-agent property search.
+Reply email today, two lines: two live A2A agents (one commercial, one CIC), and the
+interoperability lesson — schema divergence — as the actual subject.
+
+1. STALL / PARTIAL PROGRESS
+Working: MH search (36 rows, <300ms), EA LETTINGS (36 rows, real prices), both cards
+served, ES256, MCP + skills.md live.
+Broken: MH price + district null; EA SALES empty; EA card 405 on GET; MH card
+inputSchema empty; failures masked by HTTP 200.
+Asserted but unverified in our own brief: "EA carries prices" (LETTINGS only),
+"4 skills" vs the 3 we list.
+Stall point: no shared conformance surface. Each leg is plausible alone and
+inconsistent together — the story worth telling and the demo that breaks.
+
+2. ENFORCEMENT OF ENFORCEMENT
+Today a human eyeballs it 30 minutes out. Proposed: the probe script is the gate —
+no artefact leaves the repo unless a run in the last 24h produced it. Card generated
+from the validating schema, so drift cannot compile. Nightly CI fails on non-200,
+state!=completed, zero results for a known-good query, null price on a priced market,
+or unfetchable card.
+
+3. OBSERVABILITY MATRIX
+Availability: HTTP only -> needs uptime probe. Latency: none -> p50/p95 per skill.
+Schema: none -> contract test. Semantics: none -> non-null price, non-empty,
+district present. Error fidelity: none -> state=failed must read as failure.
+Card/impl parity: none -> nightly diff. Coverage is one cell of six, and it lies.
+
+4. SILENT-FAILURE PROBE (executed)
+Three reproduced classes: (a) 200 + failed + "Invalid parameters" — caller error
+that reads as server error; (b) 200 + completed + all-null prices — indistinguishable
+from a priceless market; (c) 200 + completed + 0 results — indistinguishable from an
+empty market. A Google integrator hits (b) or (c) and reports "their data is empty",
+not "my call was wrong". Live today.
+
+5. FAULT INJECTION + DETECTION BUDGET
+Inject null price, empty result, wrong enum, 405 card, 5xx, 3s latency, stale row.
+Budget: schema/enum <60s (CI on push); semantics <5 min (business-hours probe);
+5xx/latency <2 min; card nightly. Measured detection for the null-price class today:
+unbounded — red team found it, monitoring never would. Until the 5-min probe exists,
+treat every endpoint claim as unmonitored and demo nothing live.
+
+6. COMMON MODE
+Both legs share one Postgres dataset, one ingestion path, one Vercel deploy, one
+laptop, one network. A data fault hits both at once — "demo the other leg" is not a
+fallback, and tonight proved it (SALES empty on both). Second mode: presenter is the
+operator; narration competes with typing. Third: the recording shares the defect set
+but not the failure surface — it cannot return 0 rows in front of him.
+Mitigation: static artefacts, and never present two legs as independent evidence.
+
+7. MONITOR OF MONITOR
+Nightly Actions probe posts to a channel; no run in 26h triggers a dead-man's switch.
+Human backstop: owner reads probe output at 14:00 Tuesday, screenshots into the notes.
+On the call the monitor is a file on disk that cannot fail — which is the point.
+
+8. SELF-IMPROVEMENT
+Within 24h: capture William's questions verbatim; convert each to a conformance
+assertion; add card schema-parity test; write the LETTINGS/SALES asymmetry into
+skills.md. Standing rule: no artefact reaches a partner unless a script produced it
+in the last 24h, and no endpoint is called working unless a probe asserts a non-null,
+non-empty result for a named query.

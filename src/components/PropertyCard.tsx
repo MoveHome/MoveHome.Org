@@ -155,9 +155,24 @@ export default function PropertyCard({
       <div
         className="absolute inset-0 touch-pan-y"
         onPointerDown={(e) => {
+          if (e.pointerType === 'touch') {
+            try {
+              e.currentTarget.setPointerCapture(e.pointerId);
+            } catch {}
+          }
           drag.current = { x: e.clientX, y: e.clientY };
         }}
+        onPointerCancel={() => {
+          drag.current = null;
+        }}
         onPointerUp={(e) => {
+          if (e.pointerType === 'touch') {
+            try {
+              if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                e.currentTarget.releasePointerCapture(e.pointerId);
+              }
+            } catch {}
+          }
           const s = drag.current;
           drag.current = null;
           if (!s) return;
@@ -301,14 +316,16 @@ export default function PropertyCard({
             </button>
           )}
 
-          <button
-            type="button"
-            data-testid="estate-agent-pill"
-            onClick={() => setAgentModalOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-950/80 px-3 py-1 text-[11px] font-semibold text-emerald-300 backdrop-blur hover:bg-emerald-900/80 transition"
-          >
-            <span>Listed by {agentProfile.name} · Verified ↗</span>
-          </button>
+          {agentProfile && (
+            <button
+              type="button"
+              data-testid="estate-agent-pill"
+              onClick={() => setAgentModalOpen(true)}
+              className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-950/80 px-3 py-1 text-[11px] font-semibold text-emerald-300 backdrop-blur hover:bg-emerald-900/80 transition"
+            >
+              <span>Listed by {agentProfile.name} · Verified ↗</span>
+            </button>
+          )}
         </div>
 
         {/* 5 standard action circles */}
@@ -379,14 +396,16 @@ export default function PropertyCard({
           <div className="space-y-3 p-3">
             <Card title="Estate Agent &amp; Virtual Tour">
               <div className="flex flex-wrap gap-2 items-center">
-                <button
-                  type="button"
-                  data-testid="estate-agent-pill"
-                  onClick={() => setAgentModalOpen(true)}
-                  className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-950/80 px-3 py-1 text-[11px] font-semibold text-emerald-300 hover:bg-emerald-900/80 transition"
-                >
-                  Listed by {agentProfile.name} · Verified ↗
-                </button>
+                {agentProfile && (
+                  <button
+                    type="button"
+                    data-testid="estate-agent-pill"
+                    onClick={() => setAgentModalOpen(true)}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-950/80 px-3 py-1 text-[11px] font-semibold text-emerald-300 hover:bg-emerald-900/80 transition"
+                  >
+                    Listed by {agentProfile.name} · Verified ↗
+                  </button>
+                )}
 
                 {listing.tour_360_url && (
                   <button
@@ -473,49 +492,10 @@ export default function PropertyCard({
 
       {/* ── Viewing Slots Sheet ───────────────────────────────────────── */}
       {sheet && (
-        <div
-          className="absolute inset-0 z-40 flex items-end bg-black/80 backdrop-blur-sm"
-          onClick={() => setSheet(false)}
-        >
-          <div
-            className="w-full rounded-t-3xl border-t border-white/20 bg-zinc-950 p-5 shadow-2xl space-y-4"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
-              <div>
-                <h3 className="text-sm font-bold text-white">Book a viewing slot</h3>
-                <p className="text-xs text-zinc-400">{titleOf(listing)}</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setSheet(false)}
-                className="rounded-full p-1 text-zinc-400 hover:text-white"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="space-y-2">
-              <p className="text-xs font-semibold text-zinc-300">Available Slots</p>
-              <div className="grid grid-cols-1 gap-2 max-h-48 overflow-y-auto">
-                {viewingSlots().map((slot) => (
-                  <button
-                    key={slot.iso}
-                    type="button"
-                    onClick={() => {
-                      alert(`Viewing requested for ${slot.label}. An agent will confirm shortly.`);
-                      setSheet(false);
-                    }}
-                    className="flex items-center justify-between rounded-xl border border-zinc-800 bg-zinc-900 p-3 text-xs text-zinc-200 hover:border-emerald-500/50 hover:bg-zinc-800 transition"
-                  >
-                    <span>📅 {slot.label}</span>
-                    <span className="font-semibold text-emerald-400">Select →</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
-        </div>
+        <ViewingSheet
+          listing={listing}
+          onClose={() => setSheet(false)}
+        />
       )}
 
       {/* Estate Agent Profile Modal */}
@@ -684,6 +664,170 @@ function SpeakerIcon({ size, color }: { size: number; color: string }) {
       <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
       <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
     </svg>
+  );
+}
+
+function ViewingSheet({
+  listing,
+  onClose
+}: {
+  listing: Listing;
+  onClose: () => void;
+}) {
+  const [selectedSlot, setSelectedSlot] = useState<{ iso: string; label: string } | null>(null);
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState('');
+
+  const slots = viewingSlots();
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim() || !email.trim()) {
+      setError('Name and email are required.');
+      return;
+    }
+    setError('');
+    setLoading(true);
+
+    try {
+      const res = await fetch('/api/enquire', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          raia_id: listing.raia_id,
+          enquirer: { name, email, phone: phone || null, preferred_contact: 'email' },
+          message: selectedSlot
+            ? `Requested viewing slot: ${selectedSlot.label}`
+            : 'Requested property viewing',
+          viewing_request: selectedSlot
+            ? { preferred_dates: [selectedSlot.iso], party_size: 1 }
+            : null
+        })
+      });
+
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || 'Failed to send viewing request');
+      }
+
+      setSent(true);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to send request');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div
+      className="absolute inset-0 z-40 flex items-end bg-black/80 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="w-full rounded-t-3xl border-t border-white/20 bg-zinc-950 p-5 shadow-2xl space-y-4 max-h-[85vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+          <div>
+            <h3 className="text-sm font-bold text-white">Book a viewing</h3>
+            <p className="text-xs text-zinc-400">{titleOf(listing)}</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full p-1 text-zinc-400 hover:text-white"
+          >
+            ✕
+          </button>
+        </div>
+
+        {sent ? (
+          <div className="py-6 text-center space-y-2">
+            <span className="text-3xl">✅</span>
+            <h4 className="text-sm font-bold text-emerald-400">Viewing Request Sent!</h4>
+            <p className="text-xs text-zinc-300">
+              The agent for {titleOf(listing)} has received your request and will confirm shortly.
+            </p>
+            <button
+              type="button"
+              onClick={onClose}
+              className="mt-4 rounded-xl bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-500"
+            >
+              Done
+            </button>
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="space-y-4 text-xs">
+            {error && <div className="rounded-lg bg-red-500/10 border border-red-500/20 p-2 text-red-400">{error}</div>}
+
+            <div className="space-y-2">
+              <label className="block font-semibold text-zinc-300">Select a Slot</label>
+              <div className="grid grid-cols-1 gap-2 max-h-36 overflow-y-auto">
+                {slots.map((slot) => {
+                  const isSelected = selectedSlot?.iso === slot.iso;
+                  return (
+                    <button
+                      key={slot.iso}
+                      type="button"
+                      onClick={() => setSelectedSlot(slot)}
+                      className={`flex items-center justify-between rounded-xl border p-2.5 transition ${
+                        isSelected
+                          ? 'border-emerald-500 bg-emerald-950/40 text-emerald-300'
+                          : 'border-zinc-800 bg-zinc-900 text-zinc-300 hover:border-zinc-700'
+                      }`}
+                    >
+                      <span>📅 {slot.label}</span>
+                      <span className="font-semibold text-emerald-400">
+                        {isSelected ? 'Selected ✓' : 'Select'}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="block font-semibold text-zinc-300">Your Details</label>
+              <input
+                type="text"
+                placeholder="Full Name *"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-white focus:border-emerald-500 focus:outline-none"
+              />
+              <input
+                type="email"
+                placeholder="Email Address *"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-white focus:border-emerald-500 focus:outline-none"
+              />
+              <input
+                type="tel"
+                placeholder="Phone Number (optional)"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-white focus:border-emerald-500 focus:outline-none"
+              />
+            </div>
+
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full rounded-xl bg-emerald-600 py-2.5 font-bold text-white hover:bg-emerald-500 disabled:opacity-50 transition"
+            >
+              {loading ? 'Sending Request...' : 'Confirm Viewing Request'}
+            </button>
+          </form>
+        )}
+      </div>
+    </div>
   );
 }
 

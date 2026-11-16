@@ -58,9 +58,9 @@ export const ESTATE_AGENT_PROFILES: Record<string, EstateAgentProfile> = {
 
 export const DEFAULT_ESTATE_AGENT_PROFILE: EstateAgentProfile = ESTATE_AGENT_PROFILES['org-gb-07798821'];
 
-export function getEstateAgentProfile(agentId: string | null | undefined): EstateAgentProfile {
+export function getEstateAgentProfile(agentId: string | null | undefined): EstateAgentProfile | null {
   if (agentId && ESTATE_AGENT_PROFILES[agentId]) {
     return ESTATE_AGENT_PROFILES[agentId];
   }
-  return DEFAULT_ESTATE_AGENT_PROFILE;
+  return null;
 }

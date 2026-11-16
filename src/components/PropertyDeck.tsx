@@ -132,7 +132,7 @@ export default function PropertyDeck({
         return false;
       }
       if (service !== 'all' && l.service_type !== service) return false;
-      if (budget > 0) {
+      if (budget > 0 && l.service_type !== 'sale') {
         const price = priceGbp(l);
         // Unknown price stays visible — hiding it silently loses listings.
         if (price != null && price > budget) return false;
@@ -169,8 +169,12 @@ export default function PropertyDeck({
       const img = new window.Image();
       img.src = src;
     }
-    // N+1 audio prefetch
-    fetch(`/api/tts?raia_id=${encodeURIComponent(nextListing.raia_id)}`).catch(() => {});
+    // N+1 audio prefetch with cancellation signal to prevent runaway/overlapping fetches
+    const controller = new AbortController();
+    fetch(`/api/tts?raia_id=${encodeURIComponent(nextListing.raia_id)}`, {
+      signal: controller.signal
+    }).catch(() => {});
+    return () => controller.abort();
   }, [stream, safeIndex]);
 
   const go = (delta: number) => {

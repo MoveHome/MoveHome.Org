@@ -14,6 +14,9 @@ interface Props {
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { agent_id } = await params;
   const profile = getEstateAgentProfile(agent_id);
+  if (!profile) {
+    return { title: 'Agent Not Found — MoveHome.org' };
+  }
   return {
     title: `${profile.name} · Verified Estate Agent Card — MoveHome.org`,
     description: `Official Estate Agent Card for ${profile.legal_name} (${profile.registration_authority}). ${profile.incorporation_info}.`,
@@ -24,6 +27,9 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 export default async function EstateAgentPage({ params }: Props) {
   const { agent_id } = await params;
   const profile = getEstateAgentProfile(agent_id);
+  if (!profile) {
+    notFound();
+  }
 
   // Fetch properties listed by this agent
   const { results: allListings } = await searchListings({ limit: 100 });

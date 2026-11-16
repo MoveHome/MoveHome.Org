@@ -49,14 +49,15 @@ export async function GET(request: Request) {
   }
 
   let listing: Listing | null = null;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000);
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
     listing = await getListingByRaiaId(raia_id);
-    clearTimeout(timeoutId);
   } catch (err) {
     console.error('[tts] DB lookup failed or timed out:', err);
     return NextResponse.json({ error: 'DB lookup failed' }, { status: 500 });
+  } finally {
+    clearTimeout(timeoutId);
   }
 
   if (!listing) {
@@ -68,19 +69,18 @@ export async function GET(request: Request) {
 
   let audio = cache.get(cacheKey);
   if (!audio) {
+    const fetchController = new AbortController();
+    const fetchTimeoutId = setTimeout(() => fetchController.abort(), 8000);
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
       const res = await fetch(
         `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}?output_format=mp3_44100_128`,
         {
           method: 'POST',
           headers: { 'xi-api-key': apiKey, 'Content-Type': 'application/json' },
           body: JSON.stringify({ text, model_id: MODEL_ID }),
-          signal: controller.signal
+          signal: fetchController.signal
         }
       );
-      clearTimeout(timeoutId);
 
       if (!res.ok) {
         console.error('[tts] elevenlabs', res.status, await res.text().catch(() => ''));
@@ -91,6 +91,8 @@ export async function GET(request: Request) {
     } catch (err) {
       console.error('[tts] elevenlabs fetch failed or timed out:', err);
       return NextResponse.json({ error: 'TTS upstream timeout or failure' }, { status: 504 });
+    } finally {
+      clearTimeout(fetchTimeoutId);
     }
   }
 

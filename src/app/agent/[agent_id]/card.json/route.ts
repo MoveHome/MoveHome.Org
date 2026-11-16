@@ -9,6 +9,10 @@ export async function GET(request: Request, { params }: Props) {
   const { agent_id } = await params;
   const profile = getEstateAgentProfile(agent_id);
 
+  if (!profile) {
+    return NextResponse.json({ error: 'Agent profile not found' }, { status: 404 });
+  }
+
   return NextResponse.json(profile, {
     headers: {
       'Content-Type': 'application/json',

@@ -15,6 +15,7 @@ export default function EstateAgentCardModal({ agentId, open, onClose, onFilterB
   if (!open) return null;
 
   const profile = getEstateAgentProfile(agentId);
+  if (!profile) return null;
 
   return (
     <div
