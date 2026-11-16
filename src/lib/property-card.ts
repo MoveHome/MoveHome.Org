@@ -67,11 +67,9 @@ export function countryOf(l: Listing): CatalogCountry | null {
   if (locode.startsWith('GB')) return 'GB';
   if (locode.startsWith('TH')) return 'TH';
   if (locode.startsWith('MY')) return 'MY';
-  const jurisdiction = (l.jurisdiction ?? '').toUpperCase();
-  if (jurisdiction === 'GB' || jurisdiction === 'TH' || jurisdiction === 'MY') return jurisdiction;
-  if (l.currency === 'GBP') return 'GB';
-  if (l.currency === 'THB') return 'TH';
-  if (l.currency === 'MYR') return 'MY';
+  if (l.jurisdiction === 'TH' || l.currency === 'THB') return 'TH';
+  if (l.jurisdiction === 'MY' || l.currency === 'MYR') return 'MY';
+  if (l.jurisdiction === 'GB' || l.currency === 'GBP') return 'GB';
   return null;
 }
 
