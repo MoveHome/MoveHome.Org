@@ -1,0 +1,15 @@
+# MoveHome — Open Property Index & AI Agent Protocol
+
+> MoveHome.org is a free, open, not-for-profit property listing aggregator.
+> We connect personal AI agents and users directly to real-estate listing feeds via open standards (MCP & RAIA Protocol) with zero OAuth and zero required user accounts.
+
+## AI Agent Integration & Connectivity
+- [Connect Your AI Agent Page](https://movehome.org/connect): Step-by-step instructions and MCP endpoints for connecting Claude, ChatGPT, Hermes Agent, Gemini, and Cursor.
+- [MCP Endpoint](https://movehome.org/api/mcp): Model Context Protocol (MCP) HTTP stream endpoint offering open property search, listing inspection, and viewing scheduling capabilities.
+- [Skills Manifest](https://movehome.org/skills.md): Machine-readable skill definition and instruction file for AI agents querying MoveHome property data.
+- [A2A Agent Card](https://movehome.org/.well-known/agent-card.json): Agent-to-Agent (A2A 1.0) service discovery manifest.
+
+## Site & Protocol Information
+- [About MoveHome](https://movehome.org/about): Information on MoveHome CIC's open mission and not-for-profit model.
+- [The Charter](https://movehome.org/charter): Platform governance principles and open data commitments.
+- [Terms of Use](https://movehome.org/terms): Terms of Use for the MoveHome open property index and API endpoints.
