@@ -74,6 +74,28 @@ export function resolveDefaultCountry(ipCountry: string | null | undefined): Cat
   return cc === 'TH' || cc === 'MY' ? cc : 'GB';
 }
 
+export type TtsLocale = 'en-GB' | 'th-TH' | 'ms-MY' | 'ja-JP';
+
+// The spoken locale, shared by the request, the prefetch and the browser
+// fallback so every market reaches its own voice.
+export function ttsLocaleOf(l: Listing): TtsLocale {
+  const cc = (l.jurisdiction || (l.un_locode ?? '').slice(0, 2)).toUpperCase();
+  const byCountry: Record<string, TtsLocale> = { TH: 'th-TH', MY: 'ms-MY', JP: 'ja-JP' };
+  if (byCountry[cc]) return byCountry[cc];
+  const byCurrency: Record<string, TtsLocale> = { THB: 'th-TH', MYR: 'ms-MY', JPY: 'ja-JP' };
+  return byCurrency[l.currency ?? ''] ?? 'en-GB';
+}
+
+// \b keeps /male/ from matching the "male" inside "female".
+const GENDER_VOICE: Record<'female' | 'male', RegExp> = {
+  female: /\bfemale\b|samantha|karen|moira|tessa|victoria|kyoko|kanya/i,
+  male: /\bmale\b|daniel|alex|fred|david|otoya|niwat/i
+};
+
+export function voiceMatchesGender(name: string, gender: 'female' | 'male'): boolean {
+  return GENDER_VOICE[gender].test(name);
+}
+
 export function priceThb(l: Listing): number | null {
   const p =
     l.service_type === 'sale' ? l.asking_price : (l.rent_pcm ?? (l.daily_rate ? l.daily_rate * 30 : null));

@@ -13,7 +13,8 @@ import {
   priceGbp,
   priceMyr,
   priceThb,
-  clusterOf
+  clusterOf,
+  ttsLocaleOf
 } from '@/lib/property-card';
 
 const SAVED_KEY = 'movehome.saved.v1';
@@ -240,7 +241,7 @@ export default function PropertyDeck({
     }
     // N+1 audio prefetch with cancellation signal to prevent runaway/overlapping fetches
     const controller = new AbortController();
-    const lang = countryOf(nextListing) === 'TH' ? 'th-TH' : 'en-GB';
+    const lang = ttsLocaleOf(nextListing);
     fetch(
       `/api/tts?raia_id=${encodeURIComponent(nextListing.raia_id)}&lang=${lang}&gender=${voiceGender}`,
       { signal: controller.signal }

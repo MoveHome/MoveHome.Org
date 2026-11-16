@@ -11,13 +11,14 @@ import DescriptionToggleButton from './DescriptionToggleButton';
 import EstateAgentCardModal from './EstateAgentCardModal';
 import {
   buildPropertyDescriptionWithCta,
-  countryOf,
   isVacant,
   priceLabel,
   specGroups,
   statusLabel,
   titleOf,
+  ttsLocaleOf,
   viewingSlots,
+  voiceMatchesGender,
   youtubeIdOf
 } from '@/lib/property-card';
 
@@ -152,7 +153,7 @@ export default function PropertyCard({
     stopNarration();
   }, [listing.raia_id, drawer, stopNarration]);
 
-  const locale = countryOf(listing) === 'TH' ? 'th-TH' : 'en-GB';
+  const locale = ttsLocaleOf(listing);
 
   // Local browser voice: the fallback when the TTS endpoint has no key/audio.
   function speakLocal() {
@@ -165,8 +166,7 @@ export default function PropertyCard({
     const voices = window.speechSynthesis
       .getVoices()
       .filter((v) => v.lang.replace('_', '-').toLowerCase().startsWith(locale.toLowerCase()));
-    const want = voiceGender === 'female' ? /female|samantha|karen|moira|tessa|victoria|kyoko|kanya/i : /male|daniel|alex|fred|david|otoya|niwat/i;
-    u.voice = voices.find((v) => want.test(v.name)) ?? voices[0] ?? null;
+    u.voice = voices.find((v) => voiceMatchesGender(v.name, voiceGender)) ?? voices[0] ?? null;
     u.rate = 1;
     u.onend = () => setNarration('idle');
     u.onerror = () => setNarration('idle');

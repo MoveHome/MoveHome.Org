@@ -8,18 +8,33 @@ import { getListingByRaiaId } from '@/lib/queries';
 import { buildPropertyDescriptionWithCta } from '@/lib/property-card';
 import { getEstateAgentProfile } from '@/lib/agent-directory';
 import { createSupabaseAdminClient } from '@/lib/supabase-admin';
-import { cachePath, resolveLang, scriptHash, voiceFor, type VoiceGender } from '@/lib/tts';
+import { cachePath, resolveLang, scriptHash, voiceFor, type TtsLang, type VoiceGender } from '@/lib/tts';
 import type { Listing } from '@/lib/types';
 
 const RAIA_ID_RE = /^prop-[a-z]{2}-[a-z0-9-]{2,32}-[0-9]{4,}$/;
 const MAX_CHARS = 2500;
 const MAX_CACHE_ENTRIES = 100;
 const BUCKET = 'tts-audio';
-const CACHE_CONTROL = 'public, max-age=86400, s-maxage=604800';
+// The lookup URL is mutable (raia_id only, no script hash), so a reprice or a
+// withdrawal must take effect on the very next request: nothing may store it.
+const CACHE_CONTROL = 'no-store';
+const MISS_LIMIT = 10; // billable syntheses per client per minute
+const MISS_WINDOW_MS = 60_000;
+const LOCK_TTL_MS = 120_000;
+const LOCK_WAIT_MS = 5_000;
+const LOCK_POLL_MS = 150;
+
+type Store = ReturnType<typeof createSupabaseAdminClient>;
+type BucketApi = ReturnType<Store['storage']['from']>;
 
 // shortcut: per-instance memory cache stays as the no-Storage fallback; the
 // bucket is the shared copy once provisioned.
 const cache = new Map<string, ArrayBuffer>();
+// Synthesised on this instance but the shared write failed — retry it later.
+const pendingWrite = new Set<string>();
+// Claims are zero-byte Storage objects so instances agree on who is working;
+// without Storage only this instance can be coordinated (expiry as the value).
+const localClaims = new Map<string, number>();
 
 function setCache(key: string, value: ArrayBuffer) {
   if (cache.size >= MAX_CACHE_ENTRIES) {
@@ -31,11 +46,196 @@ function setCache(key: string, value: ArrayBuffer) {
 
 // Storage is best-effort: a missing bucket logs and falls through to the
 // in-memory/upstream path rather than failing the request.
-function storage() {
+function storage(): Store | null {
   try {
     return createSupabaseAdminClient();
   } catch {
     return null;
+  }
+}
+
+function bucketOf(store: Store): BucketApi {
+  return store.storage.from(BUCKET);
+}
+
+function clientIp(request: Request): string {
+  const forwarded = request.headers.get('x-forwarded-for');
+  return forwarded?.split(',')[0].trim() || request.headers.get('x-real-ip') || 'unknown';
+}
+
+// Create-if-absent: true when this caller now owns `key`. A Storage outage
+// fails open (this instance just coordinates with itself) rather than 429-ing
+// every request during an incident.
+async function claim(key: string, store: Store | null, ttlMs: number): Promise<boolean> {
+  if (store) {
+    try {
+      const res = await bucketOf(store).upload(key, new Blob(['']), { upsert: false });
+      return !res.error;
+    } catch (err) {
+      console.error('[tts] claim unavailable, continuing uncoordinated:', err);
+      return true;
+    }
+  }
+  const now = Date.now();
+  const held = localClaims.get(key);
+  if (held && held > now) return false;
+  if (localClaims.size > 5_000) for (const [k, exp] of localClaims) if (exp <= now) localClaims.delete(k);
+  localClaims.set(key, now + ttlMs);
+  return true;
+}
+
+async function release(key: string, store: Store | null) {
+  if (!store) {
+    localClaims.delete(key);
+    return;
+  }
+  try {
+    await bucketOf(store).remove([key]);
+  } catch (err) {
+    console.error('[tts] claim release failed:', err);
+  }
+}
+
+async function download(path: string, store: Store | null): Promise<ArrayBuffer | null> {
+  if (!store) return null;
+  try {
+    const hit = await bucketOf(store).download(path);
+    if (hit.error || !hit.data) return null;
+    return await hit.data.arrayBuffer();
+  } catch (err) {
+    console.error('[tts] storage read failed:', err);
+    return null;
+  }
+}
+
+async function dropPrefix(prefix: string, store: Store) {
+  try {
+    const listed = await bucketOf(store).list(prefix);
+    const names = (listed.data ?? []).map((e) => `${prefix}/${e.name}`);
+    if (names.length) await bucketOf(store).remove(names);
+  } catch (err) {
+    console.error('[tts] prefix cleanup skipped:', err);
+  }
+}
+
+// Shared abuse control: at most MISS_LIMIT billable misses per client per
+// minute, agreed across instances through create-if-absent slot markers.
+async function withinMissBudget(ip: string, store: Store | null): Promise<boolean> {
+  const window = Math.floor(Date.now() / MISS_WINDOW_MS);
+  const dir = `tts/_budget/${ip}/${window}`;
+  for (let slot = 0; slot < MISS_LIMIT; slot++) {
+    if (await claim(`${dir}/${slot}`, store, MISS_WINDOW_MS)) {
+      if (store) void dropPrefix(`tts/_budget/${ip}/${window - 1}`, store);
+      return true;
+    }
+  }
+  return false;
+}
+
+function scriptFor(l: Listing): string {
+  return buildPropertyDescriptionWithCta(l, getEstateAgentProfile(l.agent_id)?.name).slice(0, MAX_CHARS);
+}
+
+class UpstreamError extends Error {
+  constructor(
+    readonly status: number,
+    message: string
+  ) {
+    super(message);
+  }
+}
+
+async function synthesize(
+  apiKey: string,
+  script: string,
+  lang: TtsLang,
+  gender: VoiceGender
+): Promise<ArrayBuffer> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(
+      `https://texttospeech.googleapis.com/v1/text:synthesize?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          input: { text: script },
+          voice: { languageCode: lang, name: voiceFor(lang, gender) },
+          audioConfig: { audioEncoding: 'MP3' }
+        }),
+        signal: controller.signal
+      }
+    );
+    if (!res.ok) {
+      console.error('[tts] google', res.status, await res.text().catch(() => ''));
+      throw new UpstreamError(502, 'TTS upstream failed');
+    }
+    const body = (await res.json()) as { audioContent?: string };
+    if (!body.audioContent) throw new UpstreamError(502, 'TTS upstream returned no audio');
+    return Uint8Array.from(atob(body.audioContent), (c) => c.charCodeAt(0)).buffer;
+  } catch (err) {
+    if (err instanceof UpstreamError) throw err;
+    console.error('[tts] google fetch failed or timed out:', err);
+    throw new UpstreamError(504, 'TTS upstream timeout or failure');
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function waitForUpload(path: string, store: Store | null): Promise<ArrayBuffer | null> {
+  if (!store) return null;
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_MS));
+    const hit = await download(path, store);
+    if (hit) return hit;
+  }
+  return null;
+}
+
+async function persist(
+  raia_id: string,
+  lang: TtsLang,
+  gender: VoiceGender,
+  path: string,
+  audio: ArrayBuffer,
+  store: Store | null
+) {
+  if (!store) return;
+  try {
+    const up = await bucketOf(store).upload(path, new Blob([audio], { type: 'audio/mpeg' }), {
+      contentType: 'audio/mpeg',
+      cacheControl: '604800',
+      upsert: true
+    });
+    if (up.error) throw new Error(up.error.message);
+    pendingWrite.delete(path);
+  } catch (err) {
+    // Keep the audio for this instance and retry the shared write next time.
+    console.error('[tts] storage write failed (retrying on a later request):', err);
+    pendingWrite.add(path);
+    return;
+  }
+  await prune(raia_id, lang, gender, store);
+}
+
+// One file per (listing, locale, voice). Delete only hashes that are neither
+// the listing's *current* script nor the file just written, so an older
+// in-flight version can never remove the audio a newer one serves.
+async function prune(raia_id: string, lang: TtsLang, gender: VoiceGender, store: Store) {
+  try {
+    const fresh = await getListingByRaiaId(raia_id);
+    if (!fresh) return;
+    const keep = cachePath(raia_id, lang, gender, scriptHash(scriptFor(fresh)));
+    const dir = `tts/${raia_id}/${lang}/${gender}`;
+    const listed = await bucketOf(store).list(dir);
+    const stale = (listed.data ?? [])
+      .map((e) => `${dir}/${e.name}`)
+      .filter((p) => p.endsWith('.mp3') && p !== keep);
+    if (stale.length) await bucketOf(store).remove(stale);
+  } catch (err) {
+    console.error('[tts] stale cleanup skipped:', err);
   }
 }
 
@@ -51,11 +251,8 @@ export async function GET(request: Request) {
   }
   const gender: VoiceGender = genderParam === 'male' ? 'male' : 'female';
 
-  const apiKey = process.env.GOOGLE_TTS_API_KEY || process.env.GEMINI_API_KEY;
-  if (!apiKey) {
-    return NextResponse.json({ error: 'TTS not configured' }, { status: 503 });
-  }
-
+  // The lookup comes first: a withdrawn or unknown listing is 404 whether or
+  // not a provider key is configured, and stored audio needs no key at all.
   let listing: Listing | null = null;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 8000);
@@ -76,79 +273,64 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Invalid lang' }, { status: 400 });
   }
 
-  const script = buildPropertyDescriptionWithCta(
-    listing,
-    getEstateAgentProfile(listing.agent_id)?.name
-  ).slice(0, MAX_CHARS);
+  const script = scriptFor(listing);
   const hash = scriptHash(script);
   const path = cachePath(raia_id, lang, gender, hash);
   const store = storage();
 
-  let fresh = false;
   let audio: ArrayBuffer | null = cache.get(path) ?? null;
-  if (!audio && store) {
-    const hit = await store.storage.from(BUCKET).download(path);
-    if (hit.data) {
-      audio = await hit.data.arrayBuffer();
-      setCache(path, audio);
+  if (audio) {
+    if (pendingWrite.has(path)) await persist(raia_id, lang, gender, path, audio, store);
+  } else {
+    audio = await download(path, store);
+    if (audio) setCache(path, audio);
+  }
+
+  if (!audio) {
+    const apiKey = process.env.GOOGLE_TTS_API_KEY || process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json({ error: 'TTS not configured' }, { status: 503 });
+    }
+    if (!(await withinMissBudget(clientIp(request), store))) {
+      return NextResponse.json(
+        { error: 'Too many narration requests' },
+        { status: 429, headers: { 'Retry-After': '60' } }
+      );
+    }
+
+    const lock = `tts/_locks/${lang}/${gender}/${raia_id}-${hash}`;
+    try {
+      if (await claim(lock, store, LOCK_TTL_MS)) {
+        try {
+          audio = await synthesize(apiKey, script, lang, gender);
+          setCache(path, audio);
+          await persist(raia_id, lang, gender, path, audio, store);
+        } finally {
+          await release(lock, store);
+        }
+      } else {
+        // Another worker is already paying for this exact script: use its
+        // upload, and only synthesise if it never lands (crashed lock holder).
+        audio = await waitForUpload(path, store);
+        if (audio) {
+          setCache(path, audio);
+        } else {
+          audio = await synthesize(apiKey, script, lang, gender);
+          setCache(path, audio);
+          await persist(raia_id, lang, gender, path, audio, store);
+        }
+      }
+    } catch (err) {
+      if (err instanceof UpstreamError) {
+        return NextResponse.json({ error: err.message }, { status: err.status });
+      }
+      throw err;
     }
   }
 
   if (!audio) {
-    const fetchController = new AbortController();
-    const fetchTimeoutId = setTimeout(() => fetchController.abort(), 8000);
-    try {
-      const res = await fetch(
-        `https://texttospeech.googleapis.com/v1/text:synthesize?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            input: { text: script },
-            voice: { languageCode: lang, name: voiceFor(lang, gender) },
-            audioConfig: { audioEncoding: 'MP3' }
-          }),
-          signal: fetchController.signal
-        }
-      );
-      if (!res.ok) {
-        console.error('[tts] google', res.status, await res.text().catch(() => ''));
-        return NextResponse.json({ error: 'TTS upstream failed' }, { status: 502 });
-      }
-      const body = (await res.json()) as { audioContent?: string };
-      if (!body.audioContent) {
-        return NextResponse.json({ error: 'TTS upstream returned no audio' }, { status: 502 });
-      }
-      audio = Uint8Array.from(atob(body.audioContent), (c) => c.charCodeAt(0)).buffer;
-      fresh = true;
-      setCache(path, audio);
-    } catch (err) {
-      console.error('[tts] google fetch failed or timed out:', err);
-      return NextResponse.json({ error: 'TTS upstream timeout or failure' }, { status: 504 });
-    } finally {
-      clearTimeout(fetchTimeoutId);
-    }
+    return NextResponse.json({ error: 'TTS unavailable' }, { status: 502 });
   }
-
-  if (store && fresh) {
-    const bucket = store.storage.from(BUCKET);
-    try {
-      const up = await bucket.upload(path, new Blob([audio], { type: 'audio/mpeg' }), {
-        contentType: 'audio/mpeg',
-        cacheControl: '604800',
-        upsert: true
-      });
-      if (up.error) throw new Error(up.error.message);
-      // One file per (listing, locale, voice): drop the previous script hashes.
-      const dir = path.slice(0, path.lastIndexOf('/'));
-      const old = await bucket.list(dir);
-      const stale = (old.data ?? []).map((e) => `${dir}/${e.name}`).filter((p) => p !== path);
-      if (stale.length) await bucket.remove(stale);
-    } catch (err) {
-      console.error('[tts] storage write failed (serving uncached):', err);
-    }
-  }
-
   return new NextResponse(audio, {
     headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': CACHE_CONTROL }
   });
