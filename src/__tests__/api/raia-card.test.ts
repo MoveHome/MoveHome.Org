@@ -6,8 +6,8 @@ describe('buildAgentCard', () => {
     const card = buildAgentCard();
     expect(card.supportedInterfaces).toBeDefined();
     expect(card.supportedInterfaces).toEqual([
-      { protocolVersion: '1.0', protocolBinding: 'JSONRPC' },
-      { protocolVersion: '0.3', protocolBinding: 'JSONRPC' }
+      { url: 'https://movehome.org/api/a2a', protocolVersion: '1.0', protocolBinding: 'JSONRPC' },
+      { url: 'https://movehome.org/api/a2a', protocolVersion: '0.3', protocolBinding: 'JSONRPC' }
     ]);
   });
 });

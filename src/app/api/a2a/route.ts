@@ -1,6 +1,7 @@
 // A2A (Agent2Agent) JSON-RPC endpoint for MoveHome.org, backed by @a2a-js/sdk.
 //
-//   POST /api/a2a    — JSON-RPC 2.0 (message/send, tasks/get, …) via the SDK
+//   POST /api/a2a    — JSON-RPC 2.0 (message/send, tasks/get, …) via the SDK; A2A 1.0
+//                      (A2A-Version: 1.0, SendMessage / GetTask) via v1-adapter
 //   GET  /api/a2a    — returns the Agent Card (discovery convenience)
 //   OPTIONS          — CORS preflight (the endpoint is open to anonymous agents)
 //
@@ -20,13 +21,14 @@ import { signAgentCard } from '@/lib/a2a/card-signing';
 import { moveHomeExecutor } from '@/lib/a2a/executor';
 import { enforceRateLimit, rateLimitHeaders } from '@/lib/portal/rate-limit';
 import { agentWritesEnabled, AGENT_WRITES_DISABLED_MESSAGE } from '@/lib/agent-write-policy';
+import { negotiateVersion, toLegacyRequest, toV1Response } from '@/lib/a2a/v1-adapter';
 
 export const dynamic = 'force-dynamic';
 
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Headers': 'Content-Type, A2A-Version',
   'Access-Control-Max-Age': '86400'
 };
 
@@ -118,6 +120,21 @@ export async function POST(req: Request) {
     return json(rpcError(null, -32700, 'Invalid JSON.'), 400);
   }
 
+  // A2A 1.0 is translated to 0.3 here, before any guard below runs, so the write
+  // flag, TEST fence and throttles see one wire shape and 1.0 cannot bypass them.
+  const negotiated = negotiateVersion(raw, req.headers.get('a2a-version'));
+  if (negotiated.kind === 'error') {
+    return json(rpcError(requestId(raw), negotiated.code, negotiated.message));
+  }
+  const v1Method = negotiated.kind === 'v1' ? (raw as { method?: unknown })?.method : null;
+  if (negotiated.kind === 'v1') {
+    const translated = toLegacyRequest(raw);
+    if ('error' in translated) {
+      return json(rpcError(requestId(raw), translated.error.code, translated.error.message));
+    }
+    raw = translated.request;
+  }
+
   const rl = await checkRateLimit(req);
   if (!rl.ok) {
     return json(rpcError(requestId(raw), -32603, 'Rate limit exceeded.'), 429, {
@@ -165,7 +182,7 @@ export async function POST(req: Request) {
       console.error('[a2a] internal error', err.message);
       err.message = 'Internal error.';
     }
-    return json(result, 200, rl.headers);
+    return json(v1Method ? toV1Response(v1Method, result) : result, 200, rl.headers);
   } catch (e) {
     // The SDK normally returns JSON-RPC errors rather than throwing; surface a
     // structured error either way (use the A2AError code when present).
