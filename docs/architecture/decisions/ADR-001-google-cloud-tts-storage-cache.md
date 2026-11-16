@@ -1,6 +1,6 @@
 # ADR-001 — Google Cloud TTS with Supabase store-once audio
 
-- **Status:** Proposed (Thai male premium-tier exception requires owner approval)
+- **Status:** Amended — provider is ElevenLabs (see Amendment 1); the Google sections below are historical
 - **Date:** 2026-11-16
 - **Issue:** MoveHome/MoveHome.Org#85[4]
 - **Implementation:** PR #86, branch `fix/movehome-tts-google-cache`[5]
@@ -101,3 +101,30 @@ Deployment requires migration 0018 and provider/Storage smoke checks before the 
 [3] https://cloud.google.com/text-to-speech/pricing
 [4] https://github.com/MoveHome/MoveHome.Org/issues/85
 [5] https://github.com/MoveHome/MoveHome.Org/pull/86
+
+## Amendment 1 — ElevenLabs provider (PR #91)
+
+The implementation ships ElevenLabs instead of Google Cloud TTS; the storage
+contract above is unchanged.
+
+- **Credential:** `ELEVENLABS_API_KEY` only. No Google/Gemini credential is sent
+  to ElevenLabs; without the key the endpoint answers 503 and the client keeps
+  its `speechSynthesis` fallback.
+- **Model per language:** `eleven_flash_v2_5` except Thai (`th-TH`), where Flash
+  v2.5 has no Thai support and `eleven_multilingual_v2` is required. Selection
+  lives in `modelFor()` in `src/lib/tts.ts`, with unit coverage.
+- **Cache identity:** the object name hashes script hash + model + resolved
+  voice ID + a cache version, so changing a voice env var or the model for a
+  locale does not serve stale audio. The provider prefix (`tts/elevenlabs/…`)
+  keeps Google-era objects unservable.
+- **Concurrency:** one lease object per TTL window (`tts/_locks/<lang>/<gender>/<window>/…`),
+  created create-if-absent. The window is the fencing token: keys are immutable,
+  a contender only opens the next window when the previous one has expired, and
+  release deletes only a lease whose recorded owner matches.
+- **Cleanup:** a superseded MP3 is removed only when it is neither the current
+  script nor the file just written and has been untouched for 5 minutes, so a
+  concurrent request can never lose its current audio.
+- **Abuse budget:** per-client per-minute markers under a hashed client key (no
+  IP is stored), plus a per-instance fallback counter. A marker that cannot be
+  written is treated as a denial; only a total Storage-client failure falls back
+  to the per-instance counter alone.

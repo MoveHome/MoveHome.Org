@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { GET } from '@/app/api/tts/route';
-import { TTS_LANGS, cachePath, resolveLang, scriptHash, voiceFor, type TtsLang, type VoiceGender } from '@/lib/tts';
+import { TTS_LANGS, cachePath, leasePath, modelFor, resolveLang, scriptHash, voiceFor, type TtsLang, type VoiceGender } from '@/lib/tts';
 import { buildPropertyDescriptionWithCta, ttsLocaleOf } from '@/lib/property-card';
 import type { Listing } from '@/lib/types';
 
@@ -12,6 +12,8 @@ const state = vi.hoisted(() => ({
   // Storage object mtimes, as the bucket reports them back.
   times: new Map<string, number>(),
   uploadFails: false,
+  // Simulates only the rate-limit markers being unwritable.
+  budgetFails: false,
   readFails: false,
   // Simulates the Storage client failing to initialise at all.
   storeFails: false
@@ -38,7 +40,8 @@ vi.mock('@/lib/supabase-admin', () => ({
           },
           // create-if-absent when upsert is false, like the real bucket.
           upload: async (path: string, file: Blob, opts?: { upsert?: boolean }) => {
-            if (state.uploadFails) throw new Error('storage write down');
+            if (path.startsWith('tts/_budget/') && state.budgetFails) throw new Error('budget down');
+            if (state.uploadFails && !path.startsWith('tts/_budget/')) throw new Error('storage write down');
             if (!opts?.upsert && state.files.has(path)) return { data: null, error: { message: 'exists' } };
             state.files.set(path, file);
             state.times.set(path, Date.now());
@@ -101,7 +104,7 @@ function seed(path: string, bytes: number[] = [1, 2, 3], at = Date.now() - 60_00
 }
 
 function providerOk() {
-  const fetchMock = vi.fn(async () => ({
+  const fetchMock = vi.fn(async (_url: string, _init?: { body?: string }) => ({
     ok: true,
     arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer,
     text: async () => '',
@@ -118,6 +121,7 @@ function providerOk() {
     state.files.clear();
     state.times.clear();
     state.uploadFails = false;
+    state.budgetFails = false;
     state.readFails = false;
     state.storeFails = false;
     process.env.TRUST_PROXY = 'true';
@@ -166,9 +170,20 @@ describe('storage cache key', () => {
     );
 
     expect(new Set([a, repriced, revendored, redescribed]).size).toBe(4);
-    expect(cachePath(l.raia_id, 'en-GB', 'female', a)).toBe(
-      `tts/elevenlabs/${l.raia_id}/en-GB/female/${a}.mp3`
-    );
+    const base = cachePath(l.raia_id, 'en-GB', 'female', a);
+    expect(base.startsWith(`tts/elevenlabs/${l.raia_id}/en-GB/female/`)).toBe(true);
+    expect(base.endsWith('.mp3')).toBe(true);
+    expect(cachePath(l.raia_id, 'en-GB', 'female', a)).toBe(base);
+    // Identity covers voice and model too: a changed voice or a Thai script must
+    // not resolve to audio spoken by the old voice/model.
+    expect(cachePath(l.raia_id, 'en-GB', 'male', a)).not.toBe(base);
+    expect(cachePath(l.raia_id, 'th-TH', 'female', a)).not.toBe(base);
+    process.env.ELEVENLABS_VOICE_ID_FEMALE = 'custom-voice';
+    try {
+      expect(cachePath(l.raia_id, 'en-GB', 'female', a)).not.toBe(base);
+    } finally {
+      delete process.env.ELEVENLABS_VOICE_ID_FEMALE;
+    }
   });
 });
 
@@ -234,8 +249,54 @@ describe('GET /api/tts', () => {
     state.listing = { ...l, rent_pcm: 9999 };
     expect((await get(`raia_id=${l.raia_id}`, 'ip-nostore')).status).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    const audioFiles = [...state.files.keys()].filter((p) => p.endsWith('.mp3'));
-    expect(audioFiles).toEqual([pathOf({ ...l, rent_pcm: 9999 })]);
+    // The superseded file is young enough to be served by a request in flight,
+    // so cleanup keeps it until it ages past the retention grace.
+    expect(state.files.has(pathOf({ ...l, rent_pcm: 9999 }))).toBe(true);
+  });
+
+  it('prunes superseded audio once it is past the retention grace', async () => {
+    const l = listing({ marketing_description: 'aged cleanup test property.' });
+    const old = listing({ marketing_description: 'aged cleanup old version.' });
+    state.listing = l;
+    // Older than the grace window, and not the listing's current script.
+    seed(pathOf(old), [8], Date.now() - 10 * 60_000);
+    providerOk();
+
+    expect((await get(`raia_id=${l.raia_id}`, 'ip-aged')).status).toBe(200);
+    expect(state.files.has(pathOf(old))).toBe(false);
+    expect(state.files.has(pathOf(l))).toBe(true);
+  });
+
+  it('sends multilingual v2 for Thai, which flash v2.5 does not speak', async () => {
+    const en = listing({ marketing_description: 'model choice english.' });
+    const th = listing({
+      jurisdiction: 'TH',
+      currency: 'THB',
+      un_locode: 'THBKK',
+      marketing_description: 'model choice thai.'
+    });
+
+    state.listing = en;
+    const enFetch = providerOk();
+    expect((await get(`raia_id=${en.raia_id}&lang=en-GB`, 'ip-model-en')).status).toBe(200);
+    expect(JSON.parse(enFetch.mock.calls[0][1]?.body ?? '{}').model_id).toBe('eleven_flash_v2_5');
+    expect(modelFor('th-TH')).toBe('eleven_multilingual_v2');
+
+    state.listing = th;
+    const thFetch = providerOk();
+    expect((await get(`raia_id=${th.raia_id}&lang=th-TH&gender=male`, 'ip-model-th')).status).toBe(200);
+    expect(JSON.parse(thFetch.mock.calls[0][1]?.body ?? '{}').model_id).toBe('eleven_multilingual_v2');
+    expect(voiceFor('th-TH', 'male')).toBe('ErXwobaYiN019PkySvjV');
+  });
+
+  it('refuses to synthesise when the shared budget cannot be recorded', async () => {
+    const l = listing({ marketing_description: 'unwritable budget test.' });
+    state.listing = l;
+    state.budgetFails = true;
+    const fetchMock = providerOk();
+
+    expect((await get(`raia_id=${l.raia_id}`, 'ip-budget-down')).status).toBe(429);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('synthesises once for simultaneous misses', async () => {
@@ -323,13 +384,17 @@ describe('GET /api/tts', () => {
     state.listing = l;
     const fetchMock = providerOk();
     const hash = scriptHash(buildPropertyDescriptionWithCta(l, 'Acme Estates'));
-    const now = Date.now();
-    const heldLease = `tts/_locks/en-GB/female/${l.raia_id}-${hash}/${Math.floor(now / 30_000)}`;
 
-    state.files.set(heldLease, new Blob([JSON.stringify({ owner: 'other-worker', expiresAt: Date.now() + 60_000 })]));
-
+    // Fake time first, so the seeded window is the one the request will use.
     vi.useFakeTimers();
     try {
+      vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+      const heldLease = leasePath('en-GB', 'female', l.raia_id, hash);
+      state.files.set(
+        heldLease,
+        new Blob([JSON.stringify({ owner: 'other-worker', expiresAt: Date.now() + 60_000 })])
+      );
+
       const pending = get(`raia_id=${l.raia_id}`, 'ip-lease');
       await vi.advanceTimersByTimeAsync(6000);
       const res = await pending;
@@ -338,6 +403,7 @@ describe('GET /api/tts', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
+      vi.setSystemTime(new Date());
     }
   });
 
