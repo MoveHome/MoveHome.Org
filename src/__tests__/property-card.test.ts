@@ -77,6 +77,14 @@ describe('property-card helpers', () => {
     expect(countryOf(listing({ currency: 'MYR' }))).toBe('MY');
     expect(cityOf(listing({ un_locode: 'MYKUL' }))).toBe('Kuala Lumpur');
     expect(cityOf(listing({ un_locode: 'GBXYZ' }))).toBe('UK');
+    // UN/LOCODE prefix beats currency, and codes follow UNECE, not guesses.
+    expect(countryOf(listing({ un_locode: 'GBLON', currency: 'MYR' }))).toBe('GB');
+    expect(cityOf(listing({ un_locode: 'GBLON', currency: 'MYR' }))).toBe('London');
+    expect(cityOf(listing({ un_locode: 'GBBHX' }))).toBe('Birmingham');
+    expect(cityOf(listing({ un_locode: 'GBBSH' }))).toBe('Brighton');
+    expect(cityOf(listing({ un_locode: 'GBBRF' }))).toBe('Bradford');
+    expect(cityOf(listing({ un_locode: 'MYZCA' }))).toBe('Cyberjaya');
+    expect(cityOf(listing({ un_locode: 'MYSUB' }))).toBe('Subang Jaya');
     // Pickable before any listing exists in that city, alphabetical.
     const gb = catalogCities('GB');
     expect(gb).toContain('London');
