@@ -266,7 +266,9 @@ export async function POST(req: Request) {
         enquirer_email: enquirer.email,
         enquirer_phone: enquirer.phone || null,
         source: attribution,
-        status: 'accepted'
+        // tbl_enquiries_status_check allows only new|forwarded|responded|closed;
+        // 'accepted' is the API receipt label, not a storable DB status.
+        status: 'new'
       });
 
       if (insertErr) {
