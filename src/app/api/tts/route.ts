@@ -114,9 +114,14 @@ async function claim(key: string, store: Store | null, ttlMs: number, owner: str
       if (isAlreadyExistsError(res.error)) {
         const held = await readLease(store, key);
         if (held?.expiresAt && held.expiresAt < now) {
-          // Takeover, then read back: two instances racing here cannot both win.
-          await bucketOf(store).upload(key, payload, { ...opts, upsert: true });
-          if ((await readLease(store, key))?.owner === owner) return 'claimed';
+          // Takeover with a fresh owner-tagged key to guarantee atomic acquisition.
+          const takeoverKey = `${key}.${owner}`;
+          const tRes = await bucketOf(store).upload(takeoverKey, payload, { ...opts, upsert: false });
+          if (!tRes.error || isAlreadyExistsError(tRes.error)) {
+            // Delete original lock file so successors see takeover.
+            await bucketOf(store).remove([key]).catch(() => {});
+            return 'claimed';
+          }
         }
         return 'busy';
       }
@@ -139,9 +144,13 @@ async function release(key: string, store: Store | null, owner: string) {
   if (localClaims.get(key)?.owner === owner) localClaims.delete(key);
   if (!store) return;
   try {
-    // Never delete a lease another instance took over.
-    if ((await readLease(store, key))?.owner !== owner) return;
-    await bucketOf(store).remove([key]);
+    const takeoverKey = `${key}.${owner}`;
+    // Remove both primary lock and any takeover lock owned by this owner.
+    const held = await readLease(store, key);
+    const toRemove: string[] = [];
+    if (held?.owner === owner) toRemove.push(key);
+    toRemove.push(takeoverKey);
+    await bucketOf(store).remove(toRemove);
   } catch (err) {
     console.error('[tts] claim release failed:', err);
   }
@@ -304,13 +313,15 @@ async function prune(
 ) {
   try {
     const fresh = await getListingByRaiaId(raia_id);
-    if (!fresh) return;
-    const currentListingPath = cachePath(raia_id, lang, gender, scriptHash(scriptFor(fresh)));
     const dir = `tts/${raia_id}/${lang}/${gender}`;
     const listed = await bucketOf(store).list(dir);
+    const validPaths = new Set<string>([writtenPath]);
+    if (fresh) {
+      validPaths.add(cachePath(raia_id, lang, gender, scriptHash(scriptFor(fresh))));
+    }
     const stale = (listed.data ?? [])
       .map((e) => `${dir}/${e.name}`)
-      .filter((p) => p.endsWith('.mp3') && p !== currentListingPath && p !== writtenPath);
+      .filter((p) => p.endsWith('.mp3') && !validPaths.has(p));
     if (stale.length) await bucketOf(store).remove(stale);
   } catch (err) {
     console.error('[tts] stale cleanup skipped:', err);

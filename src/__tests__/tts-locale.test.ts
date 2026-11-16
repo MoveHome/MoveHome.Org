@@ -22,6 +22,12 @@ describe('ttsLocaleOf', () => {
     expect(ttsLocaleOf(listing({ currency: 'JPY' }))).toBe('ja-JP');
     expect(ttsLocaleOf(listing({}))).toBe('en-GB');
   });
+
+  it('respects country resolution priority (un_locode/currency before default jurisdiction GB)', () => {
+    // When jurisdiction is default 'GB' but un_locode or currency indicates MY/TH, countryOf resolves to MY/TH.
+    expect(ttsLocaleOf(listing({ jurisdiction: 'GB', un_locode: 'MYKUL' }))).toBe('ms-MY');
+    expect(ttsLocaleOf(listing({ jurisdiction: 'GB', currency: 'THB' }))).toBe('th-TH');
+  });
 });
 
 describe('voiceMatchesGender', () => {

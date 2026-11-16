@@ -79,11 +79,13 @@ export type TtsLocale = 'en-GB' | 'th-TH' | 'ms-MY' | 'ja-JP';
 // The spoken locale, shared by the request, the prefetch and the browser
 // fallback so every market reaches its own voice.
 export function ttsLocaleOf(l: Listing): TtsLocale {
-  const cc = (l.jurisdiction || (l.un_locode ?? '').slice(0, 2)).toUpperCase();
-  const byCountry: Record<string, TtsLocale> = { TH: 'th-TH', MY: 'ms-MY', JP: 'ja-JP' };
-  if (byCountry[cc]) return byCountry[cc];
-  const byCurrency: Record<string, TtsLocale> = { THB: 'th-TH', MYR: 'ms-MY', JPY: 'ja-JP' };
-  return byCurrency[l.currency ?? ''] ?? 'en-GB';
+  const country = countryOf(l);
+  if (country === 'TH') return 'th-TH';
+  if (country === 'MY') return 'ms-MY';
+  if (l.jurisdiction === 'JP' || (l.un_locode ?? '').toUpperCase().startsWith('JP') || l.currency === 'JPY') {
+    return 'ja-JP';
+  }
+  return 'en-GB';
 }
 
 // \b keeps /male/ from matching the "male" inside "female".
