@@ -4,19 +4,20 @@
 // HUD rendered in React, expanded description drawer, viewing slot sheet,
 // clickable Estate Agent pill, and Giraffe 360 virtual tour modal.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Listing } from '@/lib/types';
 import { getEstateAgentProfile } from '@/lib/agent-directory';
 import DescriptionToggleButton from './DescriptionToggleButton';
 import EstateAgentCardModal from './EstateAgentCardModal';
 import {
+  buildPropertyDescriptionWithCta,
   isVacant,
-  plainText,
   priceLabel,
   specGroups,
   statusLabel,
   titleOf,
-  viewingSlots
+  viewingSlots,
+  youtubeIdOf
 } from '@/lib/property-card';
 
 // ── Component ─────────────────────────────────────────────────────────────
@@ -36,6 +37,7 @@ interface Props {
 }
 
 type Slide = { kind: 'video' | 'photo'; url: string };
+type Narration = 'idle' | 'loading' | 'playing';
 
 function slidesOf(l: Listing): Slide[] {
   const photos = (l.photos?.length
@@ -43,10 +45,18 @@ function slidesOf(l: Listing): Slide[] {
     : [l.photo_url, l.featured_image_url]
   ).filter((u): u is string => Boolean(u) && u !== l.floor_plan_url);
   return [
-    ...(l.video_url ? [{ kind: 'video' as const, url: l.video_url }] : []),
+    // YouTube pages are not video files — they get their own player instead.
+    ...(l.video_url && !youtubeIdOf(l.video_url)
+      ? [{ kind: 'video' as const, url: l.video_url }]
+      : []),
     ...photos.map((url) => ({ kind: 'photo' as const, url }))
   ];
 }
+
+// 1-sample silent WAV: playing it inside the click unlocks the same Audio
+// element for iOS Safari, which rejects a later play() outside the gesture.
+const SILENT_WAV =
+  'data:audio/wav;base64,UklGRiUAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQEAAACA';
 
 const heroPhoto = (l: Listing) =>
   [l.photo_url, l.featured_image_url, ...l.photos.map((p) => p.url)].find(
@@ -72,17 +82,21 @@ export default function PropertyCard({
 }: Props) {
   const slides = useMemo(() => slidesOf(listing), [listing]);
   const [slide, setSlide] = useState(0);
-  const [sound, setSound] = useState(false);
+  const [narration, setNarration] = useState<Narration>('idle');
   const [sheet, setSheet] = useState(false);
   const [agentModalOpen, setAgentModalOpen] = useState(false);
   const [giraffeModalOpen, setGiraffeModalOpen] = useState(false);
+  const [youtubeOpen, setYoutubeOpen] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const narrationRef = useRef<{ audio: HTMLAudioElement; abort: AbortController; url: string | null } | null>(
+    null
+  );
   const swiped = useRef(false);
   const drag = useRef<{ x: number; y: number } | null>(null);
 
   const agentProfile = getEstateAgentProfile(listing.agent_id);
+  const youtubeId = youtubeIdOf(listing.video_url);
 
   useEffect(() => {
     const v = videoRef.current;
@@ -96,7 +110,7 @@ export default function PropertyCard({
 
   // Photo arrows only — property up/down live on the deck so they survive the card.
   useEffect(() => {
-    if (drawer || !keysEnabled || agentModalOpen || giraffeModalOpen) return;
+    if (drawer || !keysEnabled || agentModalOpen || giraffeModalOpen || youtubeOpen) return;
     function onKey(e: KeyboardEvent) {
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
@@ -110,31 +124,82 @@ export default function PropertyCard({
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [drawer, keysEnabled, slides.length, agentModalOpen, giraffeModalOpen]);
+  }, [drawer, keysEnabled, slides.length, agentModalOpen, giraffeModalOpen, youtubeOpen]);
+
+  // Nothing keeps talking after the card leaves: abort the fetch, kill the
+  // audio and drop the browser voice.
+  const stopNarration = useCallback(() => {
+    const cur = narrationRef.current;
+    narrationRef.current = null;
+    if (cur) {
+      cur.abort.abort();
+      cur.audio.pause();
+      try {
+        cur.audio.currentTime = 0;
+      } catch {}
+      cur.audio.removeAttribute('src');
+      if (cur.url) URL.revokeObjectURL(cur.url);
+    }
+    window.speechSynthesis?.cancel();
+    setNarration('idle');
+  }, []);
+
+  useEffect(() => stopNarration, [stopNarration]);
+  useEffect(() => {
+    stopNarration();
+  }, [listing.raia_id, drawer, stopNarration]);
 
   // Local browser voice: the fallback when the TTS endpoint has no key/audio.
   function speakLocal() {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-    const l = listing;
-    const beds = l.bedrooms != null ? `${l.bedrooms} bedroom` : 'studio';
-    const text =
-      `${titleOf(l)}, ${areaOf(l)}. ${beds}, ${l.bathrooms ?? 1} bathroom` +
-      `${l.floor_area_sqm ? `, ${l.floor_area_sqm} square metres` : ''}. ` +
-      `${priceLabel(l)}, ${statusLabel(l)}. ` +
-      `Your MoveHome personal agent can book a viewing and handle the paperwork for you.`;
     window.speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
+    const u = new SpeechSynthesisUtterance(
+      buildPropertyDescriptionWithCta(listing, agentProfile?.name)
+    );
     u.rate = 1;
+    u.onend = () => setNarration('idle');
+    u.onerror = () => setNarration('idle');
     window.speechSynthesis.speak(u);
+    setNarration('playing');
   }
 
-  // ElevenLabs narration of the sanitised description, cached by the endpoint.
-  function narrate() {
-    const audio = (audioRef.current ??= new Audio());
-    window.speechSynthesis?.cancel();
-    audio.onerror = speakLocal;
-    audio.src = `/api/tts?raia_id=${encodeURIComponent(listing.raia_id)}`;
-    audio.play().catch(speakLocal);
+  // One narration-only toggle: 1st tap plays, 2nd tap stops.
+  function toggleNarration() {
+    if (narration !== 'idle') {
+      stopNarration();
+      return;
+    }
+    const audio = new Audio();
+    const abort = new AbortController();
+    narrationRef.current = { audio, abort, url: null };
+    setNarration('loading');
+    // Must happen synchronously inside the click or iOS blocks the later play().
+    audio.src = SILENT_WAV;
+    audio.play().catch(() => {});
+
+    (async () => {
+      try {
+        const res = await fetch(`/api/tts?raia_id=${encodeURIComponent(listing.raia_id)}`, {
+          signal: abort.signal
+        });
+        if (!res.ok) throw new Error(`tts ${res.status}`);
+        const url = URL.createObjectURL(await res.blob());
+        const cur = narrationRef.current;
+        if (!cur || cur.abort !== abort) {
+          URL.revokeObjectURL(url);
+          return;
+        }
+        cur.url = url;
+        audio.onended = stopNarration;
+        audio.src = url;
+        await audio.play();
+        setNarration('playing');
+      } catch {
+        if (abort.signal.aborted) return;
+        narrationRef.current = null;
+        speakLocal();
+      }
+    })();
   }
 
   const vacant = isVacant(listing);
@@ -180,12 +245,14 @@ export default function PropertyCard({
           const dy = e.clientY - s.y;
           if (Math.abs(dy) > 60 && Math.abs(dy) > Math.abs(dx)) {
             swiped.current = true;
+            stopNarration();
             if (dy < 0) onPass();
             else onRewind();
             return;
           }
           if (Math.abs(dx) < 60) return;
           swiped.current = true;
+          stopNarration();
           if (dx < 0) next();
           else prev();
         }}
@@ -199,7 +266,7 @@ export default function PropertyCard({
               key={s.url}
               ref={videoRef}
               src={s.url}
-              muted={!sound}
+              muted
               autoPlay
               loop
               playsInline
@@ -262,16 +329,17 @@ export default function PropertyCard({
         </div>
       )}
 
-      {/* Sound toggle */}
-      {listing.video_url && (
+      {/* YouTube tour opens in its own player — never as a silent <video src> */}
+      {youtubeId && (
         <button
           type="button"
-          onClick={() => setSound((v) => !v)}
-          aria-pressed={sound}
-          className="absolute right-3 top-7 z-20 inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-zinc-950/80 px-3 py-1 text-[11px] font-bold backdrop-blur"
+          data-testid="youtube-btn"
+          onClick={() => setYoutubeOpen(true)}
+          aria-label="Play YouTube video tour"
+          className="absolute right-3 top-7 z-20 inline-flex items-center gap-1.5 rounded-full border border-red-500/40 bg-red-950/90 px-3 py-1 text-[11px] font-bold text-white backdrop-blur"
         >
-          <SpeakerIcon size={14} color="#e4e4e7" />
-          {sound ? 'Sound On' : 'Tap for Sound'}
+          <YouTubeIcon size={14} />
+          YouTube Tour
         </button>
       )}
 
@@ -336,8 +404,17 @@ export default function PropertyCard({
           <Action label="Pass" onClick={onPass} size={56}>
             <PassIcon />
           </Action>
-          <Action label="Voice summary" onClick={narrate} size={44}>
-            <SpeakerIcon size={22} color="#38bdf8" />
+          <Action
+            label={narration === 'idle' ? 'Read description aloud' : 'Stop narration'}
+            onClick={toggleNarration}
+            size={44}
+          >
+            <span className={narration === 'loading' ? 'animate-pulse' : ''}>
+              <SpeakerIcon
+                size={22}
+                color={narration === 'playing' ? '#22c55e' : '#38bdf8'}
+              />
+            </span>
           </Action>
           <Action
             label={saved ? 'Remove from saved' : 'Save'}
@@ -436,7 +513,7 @@ export default function PropertyCard({
 
             <Card title="About this property">
               <p className="text-xs leading-relaxed text-white/70">
-                {plainText(listing.marketing_description) || 'No description provided by the agent.'}
+                {buildPropertyDescriptionWithCta(listing, agentProfile?.name)}
               </p>
             </Card>
 
@@ -554,6 +631,54 @@ export default function PropertyCard({
           </div>
         </div>
       )}
+
+      {/* YouTube Tour Modal — YouTube keeps its own volume/playback controls */}
+      {youtubeOpen && youtubeId && (
+        <div
+          className="fixed inset-0 z-50 flex flex-col bg-black p-2 md:p-4"
+          onClick={() => setYoutubeOpen(false)}
+        >
+          <div
+            className="relative flex h-full w-full flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-zinc-800 bg-zinc-900/90 px-4 py-3">
+              <div className="flex min-w-0 items-center gap-2">
+                <YouTubeIcon size={16} />
+                <span className="text-sm font-bold text-white">YouTube Tour</span>
+                <span className="truncate text-xs text-zinc-400">{titleOf(listing)}</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <a
+                  href={`https://www.youtube.com/watch?v=${youtubeId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs font-semibold text-red-400 hover:underline"
+                >
+                  Open in YouTube ↗
+                </a>
+                <button
+                  type="button"
+                  onClick={() => setYoutubeOpen(false)}
+                  className="rounded-full p-1 text-zinc-400 hover:text-white"
+                  aria-label="Close YouTube tour"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+            <div className="h-full w-full flex-1 bg-black">
+              <iframe
+                src={`https://www.youtube.com/embed/${youtubeId}?autoplay=1&rel=0`}
+                title="YouTube property tour"
+                className="h-full w-full border-0"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowFullScreen
+              />
+            </div>
+          </div>
+        </div>
+      )}
     </article>
   );
 }
@@ -645,6 +770,14 @@ function HeartIcon({ filled }: { filled: boolean }) {
       strokeWidth="2.5"
     >
       <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+    </svg>
+  );
+}
+
+function YouTubeIcon({ size }: { size: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="#ef4444" aria-hidden="true">
+      <path d="M23 12s0-3.3-.42-4.88a2.53 2.53 0 0 0-1.78-1.79C19.22 4.9 12 4.9 12 4.9s-7.22 0-8.8.43A2.53 2.53 0 0 0 1.42 7.1C1 8.7 1 12 1 12s0 3.3.42 4.88a2.53 2.53 0 0 0 1.78 1.79c1.58.43 8.8.43 8.8.43s7.22 0 8.8-.43a2.53 2.53 0 0 0 1.78-1.79C23 15.3 23 12 23 12ZM9.75 15.27V8.73L15.5 12l-5.75 3.27Z" />
     </svg>
   );
 }

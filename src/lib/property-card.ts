@@ -3,6 +3,7 @@
 
 import type { Listing } from './types';
 import { getEstateAgentProfile, EstateAgentProfile } from './agent-directory';
+import { sanitizeDescription } from './sanitize-description';
 
 const SYMBOLS: Record<string, string> = { THB: '฿', GBP: '£', USD: '$', EUR: '€' };
 
@@ -138,6 +139,41 @@ export function viewingSlots(now: Date = new Date()): { iso: string; label: stri
 
 export function plainText(html: string | null): string {
   return (html ?? '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// ── Media & narration script ───────────────────────────────────────────────
+
+const YOUTUBE_RE =
+  /(?:youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/|live\/)|youtu\.be\/)([A-Za-z0-9_-]{11})/;
+
+export function youtubeIdOf(url: string | null | undefined): string | null {
+  return url?.match(YOUTUBE_RE)?.[1] ?? null;
+}
+
+// A YouTube link in <video src> fails silently, so it gets a player instead.
+export const isYouTubeUrl = (url: string | null | undefined): boolean => youtubeIdOf(url) !== null;
+
+const DESCRIPTION_MAX = 480;
+
+// One script for every surface: the TTS endpoint, the browser voice fallback
+// and the written "About this property" card all end on price + vendor CTA.
+export function buildPropertyDescriptionWithCta(
+  l: Listing,
+  vendorOrgName?: string | null
+): string {
+  const desc = plainText(sanitizeDescription(l.marketing_description));
+  const summary =
+    desc.length > DESCRIPTION_MAX
+      ? `${desc.slice(0, DESCRIPTION_MAX).replace(/\s+\S*$/, '')}…`
+      : desc;
+  const where = [l.suburb, l.postcode_district].filter(Boolean).join(', ');
+  const fallback = `${titleOf(l)}${where ? ` in ${where}` : ''}, ${statusLabel(l).toLowerCase()}.`;
+  // Never speak "only Price on application".
+  const priced = l.rent_pcm ?? l.asking_price ?? l.daily_rate;
+  const price = priced ? `And all this is only ${priceLabel(l)}. ` : '';
+  const vendor = vendorOrgName?.trim() || 'the listing agent';
+  const body = summary || fallback;
+  return `${/[.!?…]$/.test(body) ? body : `${body}.`} ${price}Just send a message to ${vendor} to arrange a viewing!`;
 }
 
 // A card with no video and no image renders a dead "No media" stage, so rich

@@ -5,8 +5,8 @@
 import { NextResponse } from 'next/server';
 import { createHash } from 'node:crypto';
 import { getListingByRaiaId } from '@/lib/queries';
-import { plainText, priceLabel, statusLabel, titleOf } from '@/lib/property-card';
-import { sanitizeDescription } from '@/lib/sanitize-description';
+import { buildPropertyDescriptionWithCta } from '@/lib/property-card';
+import { getEstateAgentProfile } from '@/lib/agent-directory';
 import type { Listing } from '@/lib/types';
 
 const RAIA_ID_RE = /^prop-[a-z]{2}-[a-z0-9-]{2,32}-[0-9]{4,}$/;
@@ -30,11 +30,7 @@ function setCache(key: string, value: ArrayBuffer) {
 }
 
 function speechText(l: Listing): string {
-  const desc = plainText(sanitizeDescription(l.marketing_description));
-  if (desc) return desc;
-  // Agents who ship no description still get a two-sentence spoken summary.
-  const beds = l.bedrooms != null ? `${l.bedrooms} bedroom` : 'studio';
-  return `${titleOf(l)} in ${l.suburb ?? 'the area'}. ${beds} home at ${priceLabel(l)}, ${statusLabel(l)}.`;
+  return buildPropertyDescriptionWithCta(l, getEstateAgentProfile(l.agent_id)?.name);
 }
 
 export async function GET(request: Request) {
