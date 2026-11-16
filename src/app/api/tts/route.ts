@@ -1,5 +1,5 @@
 // GET /api/tts?raia_id=…&lang=en-GB&gender=female — narrates the listing's
-// description through Google Cloud TTS and stores the MP3 once in Supabase
+// description through ElevenLabs TTS (eleven_flash_v2_5) and stores the MP3 once in Supabase
 // Storage, keyed by the script hash, so a changed price or CTA makes a new file.
 // Without a key the client falls back to speechSynthesis, so a 503 here is normal.
 
@@ -28,22 +28,19 @@ type Store = ReturnType<typeof createSupabaseAdminClient>;
 type BucketApi = ReturnType<Store['storage']['from']>;
 type Claim = 'claimed' | 'busy' | 'local';
 
-// shortcut: per-instance memory cache stays as the no-Storage fallback; the
-// bucket is the shared copy once provisioned.
+// Per-instance memory cache for downloaded/synthesised audio buffers
 const cache = new Map<string, ArrayBuffer>();
-// Synthesised on this instance but the shared write failed — retry it later.
-const pendingWrite = new Set<string>();
-// Claims are lease objects so instances agree on who is working; without
-// Storage only this instance can be coordinated.
+// Synthesised audio payload retained durably in memory until background storage persistence succeeds
+const pendingWriteMap = new Map<string, ArrayBuffer>();
+
+// Local locks & miss budget fallback used strictly when Supabase Storage is unavailable
 const localClaims = new Map<string, { owner: string; expiresAt: number }>();
-// Local miss counter, used only while Storage is unavailable: an outage must
-// neither bypass nor invent the per-client billable limit.
 const localMiss = new Map<string, { window: number; count: number }>();
 
 function setCache(key: string, value: ArrayBuffer) {
   if (cache.size >= MAX_CACHE_ENTRIES) {
     const firstKey = cache.keys().next().value;
-    if (firstKey !== undefined) cache.delete(firstKey);
+    if (firstKey !== undefined && !pendingWriteMap.has(firstKey)) cache.delete(firstKey);
   }
   cache.set(key, value);
 }
@@ -63,8 +60,12 @@ function bucketOf(store: Store): BucketApi {
 }
 
 function clientIp(request: Request): string {
-  const forwarded = request.headers.get('x-forwarded-for');
-  return forwarded?.split(',')[0].trim() || request.headers.get('x-real-ip') || 'unknown';
+  const isTrustedProxy = process.env.TRUST_PROXY === 'true';
+  if (isTrustedProxy) {
+    const forwarded = request.headers.get('x-forwarded-for');
+    if (forwarded) return forwarded.split(',')[0].trim();
+  }
+  return request.headers.get('x-real-ip') || 'unknown';
 }
 
 function json(data: unknown, status = 200, headers?: Record<string, string>) {
@@ -101,8 +102,6 @@ async function readLease(
   }
 }
 
-// Own `key` until the lease expires. A Storage outage falls back to this
-// instance's lease instead of bypassing the lock for every request.
 async function claim(key: string, store: Store | null, ttlMs: number, owner: string): Promise<Claim> {
   const now = Date.now();
   if (store) {
@@ -114,17 +113,16 @@ async function claim(key: string, store: Store | null, ttlMs: number, owner: str
       if (isAlreadyExistsError(res.error)) {
         const held = await readLease(store, key);
         if (held?.expiresAt && held.expiresAt < now) {
-          // Takeover with a fresh owner-tagged key to guarantee atomic acquisition.
-          const takeoverKey = `${key}.${owner}`;
-          const tRes = await bucketOf(store).upload(takeoverKey, payload, { ...opts, upsert: false });
-          if (!tRes.error || isAlreadyExistsError(tRes.error)) {
-            // Delete original lock file so successors see takeover.
-            await bucketOf(store).remove([key]).catch(() => {});
-            return 'claimed';
+          // Single-key atomic takeover with verification
+          const takeoverRes = await bucketOf(store).upload(key, payload, { ...opts, upsert: true });
+          if (!takeoverRes.error) {
+            const verified = await readLease(store, key);
+            if (verified?.owner === owner) return 'claimed';
           }
         }
         return 'busy';
       }
+      // Storage upload failure during claim: fall back to local in-memory claim so request proceeds safely
       console.error('[tts] claim storage upload error, falling back to local:', res.error);
     } catch (err) {
       console.error('[tts] claim storage exception, falling back to local:', err);
@@ -144,13 +142,10 @@ async function release(key: string, store: Store | null, owner: string) {
   if (localClaims.get(key)?.owner === owner) localClaims.delete(key);
   if (!store) return;
   try {
-    const takeoverKey = `${key}.${owner}`;
-    // Remove both primary lock and any takeover lock owned by this owner.
     const held = await readLease(store, key);
-    const toRemove: string[] = [];
-    if (held?.owner === owner) toRemove.push(key);
-    toRemove.push(takeoverKey);
-    await bucketOf(store).remove(toRemove);
+    if (held?.owner === owner) {
+      await bucketOf(store).remove([key]);
+    }
   } catch (err) {
     console.error('[tts] claim release failed:', err);
   }
@@ -197,14 +192,20 @@ async function withinMissBudget(ip: string, store: Store | null): Promise<boolea
   const window = Math.floor(Date.now() / MISS_WINDOW_MS);
   const dir = `tts/_budget/${ip}/${window}`;
   for (let slot = 0; slot < MISS_LIMIT; slot++) {
-    const res = await claim(`${dir}/${slot}`, store, MISS_WINDOW_MS, `budget-${ip}-${window}`);
-    if (res === 'claimed') {
-      void dropPrefix(`tts/_budget/${ip}/${window - 1}`, store);
-      return true;
+    const slotKey = `${dir}/${slot}`;
+    try {
+      const payload = leaseBlob(`budget-${ip}-${window}`, Date.now() + MISS_WINDOW_MS);
+      const res = await bucketOf(store).upload(slotKey, payload, { contentType: 'application/json', upsert: false });
+      if (!res.error) {
+        void dropPrefix(`tts/_budget/${ip}/${window - 1}`, store);
+        return true;
+      }
+      if (!isAlreadyExistsError(res.error)) {
+        return withinLocalBudget(ip);
+      }
+    } catch {
+      return withinLocalBudget(ip);
     }
-    // Storage transport failure: count locally rather than 429-ing or letting
-    // the request through unmetered.
-    if (res === 'local') return withinLocalBudget(ip);
   }
   return false;
 }
@@ -230,30 +231,31 @@ async function synthesize(
 ): Promise<ArrayBuffer> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 8000);
+  const voiceId = voiceFor(lang, gender);
   try {
     const res = await fetch(
-      `https://texttospeech.googleapis.com/v1/text:synthesize?key=${apiKey}`,
+      `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?output_format=mp3_44100_128`,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'xi-api-key': apiKey
+        },
         body: JSON.stringify({
-          input: { text: script },
-          voice: { languageCode: lang, name: voiceFor(lang, gender) },
-          audioConfig: { audioEncoding: 'MP3' }
+          text: script,
+          model_id: 'eleven_flash_v2_5'
         }),
         signal: controller.signal
       }
     );
     if (!res.ok) {
-      console.error('[tts] google', res.status, await res.text().catch(() => ''));
+      console.error('[tts] elevenlabs', res.status, await res.text().catch(() => ''));
       throw new UpstreamError(502, 'TTS upstream failed');
     }
-    const body = (await res.json()) as { audioContent?: string };
-    if (!body.audioContent) throw new UpstreamError(502, 'TTS upstream returned no audio');
-    return Uint8Array.from(atob(body.audioContent), (c) => c.charCodeAt(0)).buffer;
+    return await res.arrayBuffer();
   } catch (err) {
     if (err instanceof UpstreamError) throw err;
-    console.error('[tts] google fetch failed or timed out:', err);
+    console.error('[tts] elevenlabs fetch failed or timed out:', err);
     throw new UpstreamError(504, 'TTS upstream timeout or failure');
   } finally {
     clearTimeout(timeoutId);
@@ -279,11 +281,9 @@ async function persist(
   audio: ArrayBuffer,
   store: Store | null
 ) {
-  if (!store) {
-    // Storage not initialised yet: keep the audio and upload it once it is.
-    pendingWrite.add(path);
-    return;
-  }
+  pendingWriteMap.set(path, audio);
+  setCache(path, audio);
+  if (!store) return;
   try {
     const up = await bucketOf(store).upload(path, new Blob([audio], { type: 'audio/mpeg' }), {
       contentType: 'audio/mpeg',
@@ -291,14 +291,30 @@ async function persist(
       upsert: true
     });
     if (up.error) throw new Error(up.error.message);
-    pendingWrite.delete(path);
+    pendingWriteMap.delete(path);
   } catch (err) {
-    // Keep the audio for this instance and retry the shared write next time.
     console.error('[tts] storage write failed (retrying on a later request):', err);
-    pendingWrite.add(path);
     return;
   }
   await prune(raia_id, lang, gender, path, store);
+}
+
+async function retryPendingWrites(store: Store | null) {
+  if (!store || pendingWriteMap.size === 0) return;
+  for (const [path, audio] of Array.from(pendingWriteMap.entries())) {
+    try {
+      const up = await bucketOf(store).upload(path, new Blob([audio], { type: 'audio/mpeg' }), {
+        contentType: 'audio/mpeg',
+        cacheControl: '604800',
+        upsert: true
+      });
+      if (!up.error) {
+        pendingWriteMap.delete(path);
+      }
+    } catch {
+      // Retained in pendingWriteMap for future retries
+    }
+  }
 }
 
 // One file per (listing, locale, voice). Delete only hashes that are neither
@@ -367,16 +383,20 @@ export async function GET(request: Request) {
   const path = cachePath(raia_id, lang, gender, hash);
   const store = storage();
 
-  let audio: ArrayBuffer | null = cache.get(path) ?? null;
+  if (store && pendingWriteMap.size > 0) {
+    void retryPendingWrites(store);
+  }
+
+  let audio: ArrayBuffer | null = cache.get(path) ?? pendingWriteMap.get(path) ?? null;
   if (audio) {
-    if (pendingWrite.has(path)) await persist(raia_id, lang, gender, path, audio, store);
+    if (pendingWriteMap.has(path)) await persist(raia_id, lang, gender, path, audio, store);
   } else {
     audio = await download(path, store);
     if (audio) setCache(path, audio);
   }
 
   if (!audio) {
-    const apiKey = process.env.GOOGLE_TTS_API_KEY || process.env.GEMINI_API_KEY;
+    const apiKey = process.env.ELEVENLABS_API_KEY || process.env.GOOGLE_TTS_API_KEY || process.env.GEMINI_API_KEY;
     if (!apiKey) {
       return json({ error: 'TTS not configured' }, 503);
     }
@@ -397,7 +417,6 @@ export async function GET(request: Request) {
         audio = cache.get(path) ?? (await download(path, store));
         if (!audio) {
           audio = await synthesize(apiKey, script, lang, gender);
-          setCache(path, audio);
           await persist(raia_id, lang, gender, path, audio, store);
         }
       } else {

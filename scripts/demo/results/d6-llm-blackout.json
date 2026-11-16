@@ -1,0 +1,12 @@
+{
+  "drill_id": "d6-llm-blackout",
+  "injected_fault": "gemini-3.6-flash 429 rate limit / timeout",
+  "detection_name": "deterministic fallback parser fallback",
+  "budget_ms": 1200,
+  "observed_ms": 0,
+  "pass": true,
+  "evidence_paths": [
+    "__tests__/lib/intent-timeout.test.ts",
+    "__tests__/lib/intent-fallback.test.ts"
+  ]
+}

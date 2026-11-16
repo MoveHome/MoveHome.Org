@@ -1,4 +1,4 @@
-// Google Cloud TTS voice table and the Storage cache key. Pure so the route,
+// ElevenLabs TTS voice table and the Storage cache key. Pure so the route,
 // the tests and the client agree on one mapping.
 
 import { createHash } from 'node:crypto';
@@ -9,19 +9,17 @@ export const TTS_LANGS = ['en-GB', 'th-TH', 'ms-MY', 'ja-JP'] as const;
 export type TtsLang = (typeof TTS_LANGS)[number];
 export type VoiceGender = 'female' | 'male';
 
-// Every entry is a name + SSML gender taken from Google's official list
-// (https://cloud.google.com/text-to-speech/docs/list-voices-and-types).
-// Thai has no male voice below the Chirp 3: HD tier, so the male entry is
-// Premium/Chirp3 rather than Neural2 — the only catalog-verified male Thai.
-const VOICES: Record<TtsLang, Record<VoiceGender, string>> = {
-  'en-GB': { female: 'en-GB-Neural2-F', male: 'en-GB-Neural2-D' },
-  'th-TH': { female: 'th-TH-Neural2-C', male: 'th-TH-Chirp3-HD-Achird' },
-  'ms-MY': { female: 'ms-MY-Wavenet-A', male: 'ms-MY-Wavenet-D' },
-  'ja-JP': { female: 'ja-JP-Neural2-B', male: 'ja-JP-Neural2-C' }
-};
+// ElevenLabs default curated voice IDs for female / male
+// Default: Female = 21m00Tcm4TlvDq8ikWAM (Rachel), Male = ErXwobaYiN019PkySvjV (Antoni)
+// Overridable via ELEVENLABS_VOICE_ID_FEMALE / ELEVENLABS_VOICE_ID_MALE env vars.
+const DEFAULT_FEMALE_VOICE = '21m00Tcm4TlvDq8ikWAM';
+const DEFAULT_MALE_VOICE = 'ErXwobaYiN019PkySvjV';
 
-export function voiceFor(lang: TtsLang, gender: VoiceGender): string {
-  return VOICES[lang][gender];
+export function voiceFor(_lang: TtsLang, gender: VoiceGender): string {
+  if (gender === 'male') {
+    return process.env.ELEVENLABS_VOICE_ID_MALE || DEFAULT_MALE_VOICE;
+  }
+  return process.env.ELEVENLABS_VOICE_ID_FEMALE || DEFAULT_FEMALE_VOICE;
 }
 
 // Locale comes from the listing when the caller omits it; an explicit unknown
