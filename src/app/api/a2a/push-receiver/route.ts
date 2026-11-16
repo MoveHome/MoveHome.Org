@@ -3,9 +3,11 @@
 // Ships DARK: nothing registers this URL and `capabilities.pushNotifications`
 // stays false until the operator flips RAIA_A2A_PUSH_VERIFIED. The wire contract
 // is ADR-472 §C: `X-A2A-Signature` is a compact detached ES256 JWS
-// (`protected..signature`) over the RFC 8785 (JCS) canonical body, `A2A-Version`
-// is 0.3 or 1.0, and the body is `application/json` (0.3) or
-// `application/a2a+json` (1.0).
+// (`protected..signature`) over the RFC 8785 (JCS) canonical body, and each
+// protocol version is bound to exactly one media type and body variant —
+// `0.3` / `application/json` / bare Task, `1.0` / `application/a2a+json` /
+// StreamResponse. The received bytes must BE the canonical bytes, so
+// duplicate-member or re-ordered mutations cannot pass.
 //
 // Verification fails closed: alg/kid/jku/nonce/iat are checked, the key comes
 // from RAIA's fixed jku (never a caller-supplied URL), and a replayed
@@ -25,8 +27,23 @@ const RAIA_JKU = process.env.A2A_PUSH_JKU || 'https://app.estateaigents.com/.wel
 const MAX_SKEW_S = 300; // ADR-472: reject anything older/newer than 5 minutes
 const JWKS_TTL_MS = 5 * 60_000;
 const FETCH_TIMEOUT_MS = 5_000;
+// Unauthenticated endpoint: bound memory and parsing work before auth.
+const MAX_BODY_BYTES = 256 * 1024;
+const MAX_BODY_DEPTH = 32;
 
-const CONTENT_TYPES = new Set(['application/json', 'application/a2a+json']);
+// ADR-472 §C pairs the version with one media type and one body variant, so a
+// cross-pairing cannot slip through as two independent checks.
+const WIRE = {
+  '0.3': { media: 'application/json', body: 'an A2A 0.3 Task (kind:"task", id, status)' },
+  '1.0': {
+    media: 'application/a2a+json',
+    body: 'an A2A 1.0 StreamResponse (exactly one of task, message, statusUpdate, artifactUpdate)'
+  }
+} as const;
+
+const STREAM_MEMBERS = ['task', 'message', 'statusUpdate', 'artifactUpdate'] as const;
+
+type Version = keyof typeof WIRE;
 
 type ProtectedHeader = {
   alg?: unknown;
@@ -45,6 +62,24 @@ function json(body: unknown, status = 200) {
 
 function log(verdict: string, requestId: string, nonce?: string) {
   console.info('[a2a-push]', JSON.stringify({ requestId, nonce: nonce ?? null, verdict }));
+}
+
+function isObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+function tooDeep(v: unknown, depth = 0): boolean {
+  if (depth > MAX_BODY_DEPTH) return true;
+  if (Array.isArray(v)) return v.some((x) => tooDeep(x, depth + 1));
+  if (isObject(v)) return Object.values(v).some((x) => tooDeep(x, depth + 1));
+  return false;
+}
+
+// The SDK body variant the version is allowed to carry.
+function matchesVersion(version: Version, p: Record<string, unknown>): boolean {
+  if (version === '0.3') return p.kind === 'task' && typeof p.id === 'string' && isObject(p.status);
+  const present = STREAM_MEMBERS.filter((m) => p[m] !== undefined);
+  return present.length === 1 && isObject(p[present[0]]);
 }
 
 async function keys(): Promise<JWK[]> {
@@ -69,6 +104,26 @@ function issuedAt(hdr: ProtectedHeader): number {
   return NaN;
 }
 
+// Read the body with a hard byte cap. A missing or spoofed Content-Length must
+// not let an unauthenticated caller buffer unbounded data before the check.
+async function readCapped(req: Request, limit: number): Promise<Buffer | null> {
+  const reader = req.body?.getReader();
+  if (!reader) return Buffer.alloc(0);
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await reader.cancel();
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks, total);
+}
+
 export async function POST(req: Request) {
   const requestId = req.headers.get('x-request-id') || randomUUID();
   let nonce: string | undefined;
@@ -78,13 +133,14 @@ export async function POST(req: Request) {
   };
 
   const version = req.headers.get('a2a-version')?.trim() ?? '';
-  if (!/^(0\.3|1\.0)(\.\d+)?$/.test(version)) {
-    return fail(400, 'unsupported_version', 'A2A-Version must be 0.3 or 1.0.');
+  if (!(version in WIRE)) {
+    return fail(400, 'unsupported_version', 'A2A-Version must be exactly 0.3 or 1.0.');
   }
+  const wire = WIRE[version as Version];
 
   const contentType = (req.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-  if (!CONTENT_TYPES.has(contentType)) {
-    return fail(400, 'unsupported_content_type', 'Content-Type must be application/json or application/a2a+json.');
+  if (contentType !== wire.media) {
+    return fail(400, 'unsupported_content_type', `A2A-Version ${version} requires Content-Type ${wire.media}.`);
   }
 
   const signatureHeader = req.headers.get('x-a2a-signature');
@@ -95,13 +151,16 @@ export async function POST(req: Request) {
     return fail(401, 'malformed_signature', 'X-A2A-Signature must be a compact detached JWS.');
   }
 
-  let hdr: ProtectedHeader;
+  let parsed: unknown;
   try {
-    hdr = JSON.parse(Buffer.from(protectedB64, 'base64url').toString('utf8')) as ProtectedHeader;
+    parsed = JSON.parse(Buffer.from(protectedB64, 'base64url').toString('utf8'));
   } catch {
     return fail(401, 'malformed_signature', 'JWS protected header is not valid JSON.');
   }
+  // A JSON `null`/scalar/array here would throw on property access.
+  if (!isObject(parsed)) return fail(401, 'malformed_signature', 'JWS protected header must be a JSON object.');
 
+  const hdr = parsed as ProtectedHeader;
   if (hdr.alg !== 'ES256') return fail(401, 'unsupported_alg', 'JWS alg must be ES256.');
   if (typeof hdr.kid !== 'string' || !hdr.kid) {
     return fail(401, 'malformed_signature', 'JWS header must name a kid.');
@@ -122,35 +181,61 @@ export async function POST(req: Request) {
     return fail(401, 'stale_timestamp', `JWS timestamp is outside the ${MAX_SKEW_S}s window.`);
   }
 
+  const bytes = await readCapped(req, MAX_BODY_BYTES);
+  if (!bytes) return fail(413, 'body_too_large', `Body must be at most ${MAX_BODY_BYTES} bytes.`);
+
+  // Decode strictly: a lossy decode would turn a byte mutation such as 0xFF in
+  // place of EF BF BD into the U+FFFD the sender signed, so the exact bytes
+  // would no longer be what gets verified.
+  let raw: string;
+  try {
+    raw = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    return fail(400, 'invalid_body', 'Body must be valid UTF-8.');
+  }
+
   let payload: unknown;
   try {
-    payload = JSON.parse(await req.text());
+    payload = JSON.parse(raw);
   } catch {
     return fail(400, 'invalid_body', 'Body is not valid JSON.');
   }
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-    return fail(400, 'invalid_body', 'Body must be a JSON object.');
+  if (!isObject(payload)) return fail(400, 'invalid_body', 'Body must be a JSON object.');
+  if (tooDeep(payload)) return fail(400, 'invalid_body', `Body must be at most ${MAX_BODY_DEPTH} levels deep.`);
+
+  // The signed bytes ARE the received bytes: a body that does not serialize
+  // back to itself carries duplicate, re-ordered or padded members and is not
+  // the body the sender signed.
+  const jcs = canonicalize(payload);
+  if (!jcs) return fail(400, 'invalid_body', 'Body could not be canonicalized.');
+  if (!Buffer.from(jcs, 'utf8').equals(bytes)) {
+    return fail(400, 'non_canonical_body', 'Body must be the exact canonical bytes that were signed.');
   }
 
-  // Re-canonicalize so formatting differences cannot invalidate a genuine
-  // delivery; the sender signs the same JCS bytes.
-  const jcs = canonicalize(payload as Record<string, unknown>);
-  if (!jcs) return fail(400, 'invalid_body', 'Body could not be canonicalized.');
+  if (!matchesVersion(version as Version, payload)) {
+    return fail(400, 'invalid_body', `Body is not ${wire.body}.`);
+  }
 
-  let jwk: JWK | undefined;
+  let candidates: JWK[];
   try {
-    jwk = (await keys()).find((k) => k.kid === hdr.kid);
+    candidates = (await keys()).filter(
+      (k) => k.kid === hdr.kid && k.kty === 'EC' && (!k.alg || k.alg === 'ES256')
+    );
   } catch {
     return fail(503, 'jwks_unavailable', 'Could not fetch RAIA\'s signing keys.');
   }
-  if (!jwk) return fail(401, 'unknown_kid', 'No RAIA key matches the JWS kid.');
+  if (candidates.length === 0) return fail(401, 'unknown_kid', 'No RAIA key matches the JWS kid.');
+  // An ambiguous kid in the trusted JWKS must fail closed, not pick a key.
+  if (candidates.length > 1) {
+    return fail(401, 'ambiguous_kid', 'RAIA\'s JWKS holds more than one key with this kid.');
+  }
 
   try {
-    const key = await importJWK(jwk, 'ES256');
+    const key = await importJWK(candidates[0], 'ES256');
     await flattenedVerify(
       {
         protected: protectedB64,
-        payload: Buffer.from(jcs, 'utf8').toString('base64url'),
+        payload: bytes.toString('base64url'),
         signature: signatureB64
       },
       key
