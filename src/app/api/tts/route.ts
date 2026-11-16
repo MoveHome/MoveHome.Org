@@ -63,20 +63,58 @@ function clientIp(request: Request): string {
   return forwarded?.split(',')[0].trim() || request.headers.get('x-real-ip') || 'unknown';
 }
 
+function json(data: unknown, status = 200, headers?: Record<string, string>) {
+  return NextResponse.json(data, {
+    status,
+    headers: { 'Cache-Control': CACHE_CONTROL, ...headers }
+  });
+}
+
+function isAlreadyExistsError(err: { message?: string } | null): boolean {
+  if (!err || !err.message) return false;
+  const msg = err.message.toLowerCase();
+  return msg.includes('exists') || msg.includes('duplicate') || msg.includes('already');
+}
+
 // Create-if-absent: true when this caller now owns `key`. A Storage outage
-// fails open (this instance just coordinates with itself) rather than 429-ing
-// every request during an incident.
+// falls back to local in-memory coordination rather than bypassing rate limits
+// or 429-ing every request during an incident.
 async function claim(key: string, store: Store | null, ttlMs: number): Promise<boolean> {
+  const now = Date.now();
   if (store) {
     try {
-      const res = await bucketOf(store).upload(key, new Blob(['']), { upsert: false });
-      return !res.error;
+      const payload = JSON.stringify({ expiresAt: now + ttlMs });
+      const res = await bucketOf(store).upload(key, new Blob([payload], { type: 'application/json' }), {
+        contentType: 'application/json',
+        upsert: false
+      });
+      if (!res.error) return true;
+      if (isAlreadyExistsError(res.error)) {
+        // Inspect lock marker for expiration
+        const hit = await bucketOf(store).download(key);
+        if (hit.data) {
+          try {
+            const text = await hit.data.text();
+            const data = JSON.parse(text) as { expiresAt?: number };
+            if (data.expiresAt && data.expiresAt < now) {
+              const over = await bucketOf(store).upload(key, new Blob([payload], { type: 'application/json' }), {
+                contentType: 'application/json',
+                upsert: true
+              });
+              if (!over.error) return true;
+            }
+          } catch {
+            // Ignore parse errors, treat lock as active
+          }
+        }
+        return false;
+      }
+      console.error('[tts] claim storage upload error, falling back to local:', res.error);
     } catch (err) {
-      console.error('[tts] claim unavailable, continuing uncoordinated:', err);
-      return true;
+      console.error('[tts] claim storage exception, falling back to local:', err);
     }
   }
-  const now = Date.now();
+
   const held = localClaims.get(key);
   if (held && held > now) return false;
   if (localClaims.size > 5_000) for (const [k, exp] of localClaims) if (exp <= now) localClaims.delete(k);
@@ -217,22 +255,28 @@ async function persist(
     pendingWrite.add(path);
     return;
   }
-  await prune(raia_id, lang, gender, store);
+  await prune(raia_id, lang, gender, path, store);
 }
 
 // One file per (listing, locale, voice). Delete only hashes that are neither
 // the listing's *current* script nor the file just written, so an older
 // in-flight version can never remove the audio a newer one serves.
-async function prune(raia_id: string, lang: TtsLang, gender: VoiceGender, store: Store) {
+async function prune(
+  raia_id: string,
+  lang: TtsLang,
+  gender: VoiceGender,
+  writtenPath: string,
+  store: Store
+) {
   try {
     const fresh = await getListingByRaiaId(raia_id);
     if (!fresh) return;
-    const keep = cachePath(raia_id, lang, gender, scriptHash(scriptFor(fresh)));
+    const currentListingPath = cachePath(raia_id, lang, gender, scriptHash(scriptFor(fresh)));
     const dir = `tts/${raia_id}/${lang}/${gender}`;
     const listed = await bucketOf(store).list(dir);
     const stale = (listed.data ?? [])
       .map((e) => `${dir}/${e.name}`)
-      .filter((p) => p.endsWith('.mp3') && p !== keep);
+      .filter((p) => p.endsWith('.mp3') && p !== currentListingPath);
     if (stale.length) await bucketOf(store).remove(stale);
   } catch (err) {
     console.error('[tts] stale cleanup skipped:', err);
@@ -243,11 +287,11 @@ export async function GET(request: Request) {
   const params = new URL(request.url).searchParams;
   const raia_id = params.get('raia_id') ?? '';
   if (!RAIA_ID_RE.test(raia_id)) {
-    return NextResponse.json({ error: 'Invalid raia_id' }, { status: 400 });
+    return json({ error: 'Invalid raia_id' }, 400);
   }
   const genderParam = params.get('gender');
   if (genderParam && genderParam !== 'female' && genderParam !== 'male') {
-    return NextResponse.json({ error: 'Invalid gender' }, { status: 400 });
+    return json({ error: 'Invalid gender' }, 400);
   }
   const gender: VoiceGender = genderParam === 'male' ? 'male' : 'female';
 
@@ -260,17 +304,17 @@ export async function GET(request: Request) {
     listing = await getListingByRaiaId(raia_id, controller.signal);
   } catch (err) {
     console.error('[tts] DB lookup failed or timed out:', err);
-    return NextResponse.json({ error: 'DB lookup failed' }, { status: 500 });
+    return json({ error: 'DB lookup failed' }, 500);
   } finally {
     clearTimeout(timeoutId);
   }
   if (!listing) {
-    return NextResponse.json({ error: 'Listing not found' }, { status: 404 });
+    return json({ error: 'Listing not found' }, 404);
   }
 
   const lang = resolveLang(params.get('lang'), listing);
   if (!lang) {
-    return NextResponse.json({ error: 'Invalid lang' }, { status: 400 });
+    return json({ error: 'Invalid lang' }, 400);
   }
 
   const script = scriptFor(listing);
@@ -289,12 +333,13 @@ export async function GET(request: Request) {
   if (!audio) {
     const apiKey = process.env.GOOGLE_TTS_API_KEY || process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      return NextResponse.json({ error: 'TTS not configured' }, { status: 503 });
+      return json({ error: 'TTS not configured' }, 503);
     }
     if (!(await withinMissBudget(clientIp(request), store))) {
-      return NextResponse.json(
+      return json(
         { error: 'Too many narration requests' },
-        { status: 429, headers: { 'Retry-After': '60' } }
+        429,
+        { 'Retry-After': '60' }
       );
     }
 
@@ -302,9 +347,12 @@ export async function GET(request: Request) {
     try {
       if (await claim(lock, store, LOCK_TTL_MS)) {
         try {
-          audio = await synthesize(apiKey, script, lang, gender);
-          setCache(path, audio);
-          await persist(raia_id, lang, gender, path, audio, store);
+          audio = cache.get(path) ?? (await download(path, store));
+          if (!audio) {
+            audio = await synthesize(apiKey, script, lang, gender);
+            setCache(path, audio);
+            await persist(raia_id, lang, gender, path, audio, store);
+          }
         } finally {
           await release(lock, store);
         }
@@ -315,21 +363,26 @@ export async function GET(request: Request) {
         if (audio) {
           setCache(path, audio);
         } else {
-          audio = await synthesize(apiKey, script, lang, gender);
-          setCache(path, audio);
-          await persist(raia_id, lang, gender, path, audio, store);
+          audio = cache.get(path) ?? (await download(path, store));
+          if (audio) {
+            setCache(path, audio);
+          } else {
+            audio = await synthesize(apiKey, script, lang, gender);
+            setCache(path, audio);
+            await persist(raia_id, lang, gender, path, audio, store);
+          }
         }
       }
     } catch (err) {
       if (err instanceof UpstreamError) {
-        return NextResponse.json({ error: err.message }, { status: err.status });
+        return json({ error: err.message }, err.status);
       }
       throw err;
     }
   }
 
   if (!audio) {
-    return NextResponse.json({ error: 'TTS unavailable' }, { status: 502 });
+    return json({ error: 'TTS unavailable' }, 502);
   }
   return new NextResponse(audio, {
     headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': CACHE_CONTROL }
