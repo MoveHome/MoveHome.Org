@@ -78,16 +78,20 @@ vi.mock('@/lib/supabase-admin', () => {
   };
 });
 
+// Controls for the JWKS authority: __jwksKeys swaps the trusted key set,
+// __jwksDown fails the fetch.
+const net = globalThis as unknown as { __jwksKeys?: JWK[]; __jwksDown?: boolean };
+
 vi.stubGlobal(
   'fetch',
-  vi.fn(async (url: unknown) =>
-    String(url) === JKU
-      ? new Response(JSON.stringify({ keys: [publicJwk] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' }
-        })
-      : new Response('not found', { status: 404 })
-  )
+  vi.fn(async (url: unknown) => {
+    if (String(url) !== JKU) return new Response('not found', { status: 404 });
+    if (net.__jwksDown) return new Response('boom', { status: 500 });
+    return new Response(JSON.stringify({ keys: net.__jwksKeys ?? [publicJwk] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' }
+    });
+  })
 );
 
 const { POST } = await import('@/app/api/a2a/push-receiver/route');
@@ -114,7 +118,10 @@ async function sign(body: unknown, opts: SignOpts = {}) {
   return `${protectedHeader}..${signature}`;
 }
 
-function post(signature: string, body: unknown, version: '0.3' | '1.0', contentType?: string) {
+// The wire body is the exact signed bytes: objects are canonicalized (a string
+// is sent verbatim, for raw-body controls).
+function post(signature: string, body: unknown, version: string, contentType?: string) {
+  const raw = typeof body === 'string' ? body : canonicalize(body as Record<string, unknown>)!;
   return new Request('https://movehome.org/api/a2a/push-receiver', {
     method: 'POST',
     headers: {
@@ -122,8 +129,14 @@ function post(signature: string, body: unknown, version: '0.3' | '1.0', contentT
       'a2a-version': version,
       'x-a2a-signature': signature
     },
-    body: JSON.stringify(body)
+    body: raw
   });
+}
+
+// A detached JWS whose protected header is an arbitrary JSON value (for
+// malformed-header controls); the signature segment is never reached.
+function rawHeaderSignature(headerJson: string) {
+  return `${Buffer.from(headerJson, 'utf8').toString('base64url')}..AAAA`;
 }
 
 beforeAll(async () => {
@@ -205,6 +218,147 @@ describe('POST /api/a2a/push-receiver', () => {
     const res = await POST(post(await sign(TASK_03, { kid: 'not-a-raia-key' }), TASK_03, '0.3'));
     expect(res.status).toBe(401);
     expect((await res.json()).error).toBe('unknown_kid');
+  });
+
+  // F2: the version selects exactly one media type AND one body variant, so a
+  // 0.3 Task and a 1.0 StreamResponse are actually discriminated.
+  it('rejects a cross-version content-type pairing or wrong body shape (version/media type/payload binding)', async () => {
+    const taskSig = await sign(TASK_03);
+
+    const wrongMedia03 = await POST(post(taskSig, TASK_03, '0.3', 'application/a2a+json'));
+    expect(wrongMedia03.status).toBe(400);
+    expect((await wrongMedia03.json()).error).toBe('unsupported_content_type');
+
+    const wrongMedia10 = await POST(post(await sign(STREAM_10), STREAM_10, '1.0', 'application/json'));
+    expect(wrongMedia10.status).toBe(400);
+    expect((await wrongMedia10.json()).error).toBe('unsupported_content_type');
+
+    const cases: Array<[unknown, string]> = [
+      [STREAM_10, '0.3'], // StreamResponse labelled 0.3
+      [TASK_03, '1.0'], // bare Task labelled 1.0
+      [{}, '1.0'] // empty object labelled 1.0
+    ];
+    for (const [body, version] of cases) {
+      const res = await POST(post(await sign(body), body, version));
+      expect(res.status).toBe(400);
+      expect((await res.json()).error).toBe('invalid_body');
+    }
+
+    const patched = await POST(post(taskSig, TASK_03, '0.3.1'));
+    expect(patched.status).toBe(400);
+    expect((await patched.json()).error).toBe('unsupported_version');
+  });
+
+  // F3: verification must authenticate the exact received bytes. A duplicate
+  // earlier member parses to the signed object, so a re-canonicalizing
+  // verifier accepts it; the raw body here is not its own canonical form.
+  it('rejects a mutated body by verifying the exact raw bytes (duplicate kind member, re-ordered members)', async () => {
+    const sig = await sign(TASK_03);
+    const canonical = canonicalize(TASK_03 as Record<string, unknown>)!;
+
+    const duped = canonical.replace('"kind":"task"', '"kind":"evil","kind":"task"');
+    expect(JSON.parse(duped)).toEqual(TASK_03);
+    const dupRes = await POST(post(sig, duped, '0.3'));
+    expect(dupRes.status).toBe(400);
+    expect((await dupRes.json()).error).toBe('non_canonical_body');
+
+    const reordered = '{"status":{"state":"completed"},"id":"task-1","kind":"task"}';
+    const ordRes = await POST(post(sig, reordered, '0.3'));
+    expect(ordRes.status).toBe(400);
+    expect((await ordRes.json()).error).toBe('non_canonical_body');
+
+    // control: the exact signed bytes still pass
+    expect((await POST(post(sig, canonical, '0.3'))).status).toBe(200);
+  });
+
+  // F4: a JSON null (or scalar/array) protected header must be a typed 401, not
+  // a TypeError.
+  it('rejects a null protected header (and scalar/array/missing header) with a typed 401', async () => {
+    for (const headerJson of ['null', '42', '"ES256"', '[]']) {
+      const res = await POST(post(rawHeaderSignature(headerJson), TASK_03, '0.3'));
+      expect(res.status).toBe(401);
+      expect((await res.json()).error).toBe('malformed_signature');
+    }
+
+    const missing = await POST(post('', TASK_03, '0.3'));
+    expect(missing.status).toBe(401);
+    expect((await missing.json()).error).toBe('missing_signature');
+  });
+
+  // F5: the unauthenticated endpoint bounds size and depth before parse/JCS.
+  it('rejects a body over the max size bound with 413 and a too-deep body before parsing work', async () => {
+    const huge = { ...TASK_03, filler: 'x'.repeat(300 * 1024) };
+    const res = await POST(post(await sign(huge), huge, '0.3'));
+    expect(res.status).toBe(413);
+    expect((await res.json()).error).toBe('body_too_large');
+
+    let nested: Record<string, unknown> = { state: 'completed' };
+    for (let i = 0; i < 40; i++) nested = { nested };
+    const bomb = { kind: 'task', id: 'task-1', status: nested };
+    const deepRes = await POST(post(await sign(bomb), bomb, '0.3'));
+    expect(deepRes.status).toBe(400);
+    expect((await deepRes.json()).error).toBe('invalid_body');
+  });
+
+  // F6: an ambiguous kid in the trusted JWKS fails closed instead of picking one.
+  it('rejects an ambiguous kid when the trusted JWKS has duplicate kid entries', async () => {
+    net.__jwksKeys = [publicJwk, { ...publicJwk }];
+    try {
+      vi.resetModules(); // empty JWKS cache, so the duplicate set is fetched
+      const fresh = await import('@/app/api/a2a/push-receiver/route');
+      const res = await fresh.POST(post(await sign(TASK_03), TASK_03, '0.3'));
+      expect(res.status).toBe(401);
+      expect((await res.json()).error).toBe('ambiguous_kid');
+    } finally {
+      net.__jwksKeys = undefined;
+    }
+  });
+
+  // F7: the principal fail-closed controls — unknown alg, JWKS fetch error, and
+  // an expired key cache that cannot be refreshed.
+  it('fails closed on an unknown alg, a JWKS fetch error and an expired key cache', async () => {
+    const header = {
+      alg: 'HS256',
+      typ: 'JOSE',
+      kid: KID,
+      jku: JKU,
+      iat: Math.floor(Date.now() / 1000),
+      nonce: randomUUID()
+    };
+    const algRes = await POST(post(rawHeaderSignature(JSON.stringify(header)), TASK_03, '0.3'));
+    expect(algRes.status).toBe(401);
+    expect((await algRes.json()).error).toBe('unsupported_alg');
+
+    net.__jwksDown = true;
+    try {
+      vi.resetModules();
+      const down = await import('@/app/api/a2a/push-receiver/route');
+      const fetchErr = await down.POST(post(await sign(TASK_03), TASK_03, '0.3'));
+      expect(fetchErr.status).toBe(503);
+      expect((await fetchErr.json()).error).toBe('jwks_unavailable');
+    } finally {
+      net.__jwksDown = false;
+    }
+
+    vi.resetModules();
+    const warm = await import('@/app/api/a2a/push-receiver/route');
+    expect((await warm.POST(post(await sign(TASK_03), TASK_03, '0.3'))).status).toBe(200);
+
+    // past the 5-minute cache: a failed refresh must reject, never verify
+    // against the expired (stale) key set
+    const later = Date.now() + 6 * 60_000;
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(later);
+    net.__jwksDown = true;
+    try {
+      const expired = await warm.POST(
+        post(await sign(TASK_03, { iat: Math.floor(later / 1000) }), TASK_03, '0.3')
+      );
+      expect(expired.status).toBe(503);
+      expect((await expired.json()).error).toBe('jwks_unavailable');
+    } finally {
+      clock.mockRestore();
+      net.__jwksDown = false;
+    }
   });
 
   it('publishes only public JWK members', async () => {
