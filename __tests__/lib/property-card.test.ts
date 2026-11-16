@@ -46,21 +46,21 @@ describe('priceLabel', () => {
 describe('specGroups', () => {
   it('drops nulls instead of rendering NA', () => {
     expect(specGroups(listing({ bedrooms: 1, bathrooms: null, floor_area_sqm: null, floor: null }))).toEqual([
-      '1 Bed ✓'
+      '1 Bed'
     ]);
   });
 
   it('groups rooms and size', () => {
     expect(specGroups(listing({ bedrooms: 1, bathrooms: 1, floor_area_sqm: 38, floor: 41 }))).toEqual([
-      '1 Bed · 1 Bath ✓',
-      '38 m² · Fl 41 ✓'
+      '1 Bed · 1 Bath',
+      '38 m² · Fl 41'
     ]);
   });
 });
 
 describe('statusLabel', () => {
   it('marks an available listing vacant now', () => {
-    expect(statusLabel(listing())).toBe('🟢 Vacant · Available Now');
+    expect(statusLabel(listing())).toBe('Vacant · Available Now');
   });
 
   it('shows a future availability date', () => {
