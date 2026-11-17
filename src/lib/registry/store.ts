@@ -86,8 +86,16 @@ export interface ListFilters {
   category?: string;
   skill?: string;
   healthyOnly?: boolean;
+  orgOnly?: boolean;
   limit: number;
   offset: number;
+}
+
+export function isOrganisationAgent(a: Pick<PublicRegistryAgent, 'categories' | 'provider_org' | 'name' | 'slug'>): boolean {
+  if (a.categories?.includes('individual_agent') || a.categories?.includes('negotiator')) {
+    return false;
+  }
+  return true;
 }
 
 export async function listAgents(f: ListFilters): Promise<{ agents: PublicRegistryAgent[]; total: number }> {
@@ -104,13 +112,30 @@ export async function listAgents(f: ListFilters): Promise<{ agents: PublicRegist
     if (s) q = q.or(`name.ilike.%${s}%,description.ilike.%${s}%,provider_org.ilike.%${s}%`);
   }
   const { data, count } = await q.order('created_at', { ascending: false }).range(f.offset, f.offset + f.limit - 1);
-  return { agents: (data as PublicRegistryAgent[]) ?? [], total: count ?? 0 };
+  let agents = ((data as PublicRegistryAgent[]) ?? []).map(a => ({ ...a, is_org: isOrganisationAgent(a) }));
+  if (f.orgOnly) {
+    agents = agents.filter((a) => a.is_org);
+  }
+  return { agents, total: f.orgOnly ? agents.length : (count ?? 0) };
 }
 
 export async function getAgent(idOrSlug: string): Promise<PublicRegistryAgent | null> {
   const col = /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(idOrSlug) ? 'id' : 'slug';
   const { data } = await table('vw_a2a_registry_public').select('*').eq(col, idOrSlug).maybeSingle();
-  return (data as PublicRegistryAgent | null) ?? null;
+  if (!data) return null;
+  const agent = data as PublicRegistryAgent;
+  return { ...agent, is_org: isOrganisationAgent(agent) };
+}
+
+export async function getAffiliatedAgents(org: PublicRegistryAgent): Promise<PublicRegistryAgent[]> {
+  const orgName = org.provider_org || org.name || org.slug;
+  const { data } = await table('vw_a2a_registry_public')
+    .select('*')
+    .or(`provider_org.eq.${orgName},provider_org.eq.${org.slug}`);
+  const all = (data as PublicRegistryAgent[]) ?? [];
+  return all
+    .filter((a) => a.id !== org.id && !isOrganisationAgent(a))
+    .map((a) => ({ ...a, is_org: false }));
 }
 
 // Full machine-readable export — every listed agent, no pagination (bulk index).

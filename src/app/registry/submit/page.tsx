@@ -10,9 +10,30 @@ interface ProblemBody { title?: string; detail?: string; validation_errors?: { f
 
 export default function SubmitPage() {
   const [uri, setUri] = useState('');
+  const [iconUrl, setIconUrl] = useState('');
+  const [uploading, setUploading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [ok, setOk] = useState<RegisterOk | null>(null);
   const [err, setErr] = useState<ProblemBody | null>(null);
+
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/api/upload-logo', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (res.ok && data.logoUrl) {
+        setIconUrl(data.logoUrl);
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      setUploading(false);
+    }
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -45,15 +66,37 @@ export default function SubmitPage() {
       </p>
 
       <form onSubmit={submit} className="mt-6 flex flex-col gap-3">
-        <input
-          type="url"
-          required
-          value={uri}
-          onChange={(e) => setUri(e.target.value)}
-          placeholder="https://your-domain.com/.well-known/agent-card.json"
-          className="border border-[var(--border)] rounded px-3 py-2 bg-transparent"
-        />
-        <button type="submit" disabled={busy} className="rounded bg-primary text-white px-4 py-2 disabled:opacity-50">
+        <div>
+          <label className="block text-xs font-semibold text-[var(--text-dim)] mb-1">Agent Card URL (.well-known/agent-card.json)</label>
+          <input
+            type="url"
+            required
+            value={uri}
+            onChange={(e) => setUri(e.target.value)}
+            placeholder="https://your-domain.com/.well-known/agent-card.json"
+            className="w-full border border-[var(--border)] rounded px-3 py-2 bg-transparent text-sm"
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-[var(--text-dim)] mb-1">Organisation Logo (Optional)</label>
+          <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center">
+            <label className="cursor-pointer rounded border border-[var(--border)] bg-[var(--bg-elev)] px-3 py-1.5 text-xs font-semibold text-[var(--text)] hover:bg-[var(--border)]">
+              {uploading ? 'Uploading…' : 'Upload Logo'}
+              <input type="file" accept="image/*" onChange={handleFileUpload} disabled={uploading} className="hidden" />
+            </label>
+            <span className="text-xs text-[var(--text-faint)]">or URL:</span>
+            <input
+              type="url"
+              value={iconUrl}
+              onChange={(e) => setIconUrl(e.target.value)}
+              placeholder="https://domain.com/logo.png"
+              className="flex-1 border border-[var(--border)] rounded px-3 py-1.5 bg-transparent text-xs"
+            />
+          </div>
+        </div>
+
+        <button type="submit" disabled={busy} className="mt-2 rounded bg-primary text-white px-4 py-2 disabled:opacity-50 font-semibold text-sm">
           {busy ? 'Validating…' : 'Register agent'}
         </button>
       </form>
