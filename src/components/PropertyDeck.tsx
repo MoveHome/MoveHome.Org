@@ -4,18 +4,22 @@
 // sheet on the right. Owns the stream index, filters and localStorage saves.
 
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useTheme } from 'next-themes';
 import type { Listing } from '@/lib/types';
 import PropertyCard from './PropertyCard';
+import ThemeToggle from './ThemeToggle';
 import {
   catalogCities,
   countryOf,
+  feedOf,
   locationsOf,
   priceGbp,
   priceMyr,
   priceThb,
   clusterOf,
   ttsLocaleOf,
-  type AppLang
+  type AppLang,
+  type Feed
 } from '@/lib/property-card';
 
 const SAVED_KEY = 'movehome.saved.v1';
@@ -121,19 +125,44 @@ export default function PropertyDeck({
   const [drawer, setDrawer] = useState(false);
   const [tab, setTab] = useState<Tab>('explore');
   const [saved, setSaved] = useState<string[]>([]);
-  const [index, setIndex] = useState(() =>
-    Math.max(0, listings.findIndex((l) => l.raia_id === initialRaiaId))
-  );
+  // An immersive 360/YouTube viewer owns the screen; deck keys and swipes stand down.
+  const [viewerOpen, setViewerOpen] = useState(false);
+  const [feed, setFeed] = useState<Feed>('rentals');
+  // Each feed keeps its own place in the deck.
+  const [cursors, setCursors] = useState<Record<Feed, number>>(() => {
+    const i = Math.max(0, listings.findIndex((l) => l.raia_id === initialRaiaId));
+    const base: Record<Feed, number> = { sales: 0, rentals: 0 };
+    if (listings[i]) base[feedOf(listings[i]) ?? 'rentals'] = i;
+    return base;
+  });
+  const [mounted, setMounted] = useState(false);
+  const { resolvedTheme, setTheme } = useTheme();
   const modalLocSearchRef = useRef<HTMLInputElement>(null);
 
+  const index = cursors[feed];
+  const setIndex = (n: number) => setCursors((c) => ({ ...c, [feed]: n }));
+
   useEffect(() => {
+    setMounted(true);
     setSaved(readSaved());
     if (localStorage.getItem(VOICE_KEY) === 'male') setVoiceGender('male');
     const storedLang = localStorage.getItem(LANG_KEY) as AppLang | null;
     if (storedLang && ['en', 'th', 'ja', 'ms', 'zh'].includes(storedLang)) {
       setAppLang(storedLang);
     }
+    const q = new URLSearchParams(window.location.search).get('feed');
+    if (q === 'sales' || q === 'rentals') setFeed(q);
   }, []);
+
+  // Feed is the outer axis: keep ?feed= in the URL and drop a service filter
+  // that belongs to the other feed, which would otherwise empty the deck.
+  function pickFeed(f: Feed) {
+    setFeed(f);
+    setService((s) => (s === 'all' || (s === 'sale') === (f === 'sales') ? s : 'all'));
+    const url = new URL(window.location.href);
+    url.searchParams.set('feed', f);
+    window.history.replaceState(null, '', url);
+  }
 
   function pickLang(l: AppLang) {
     setAppLang(l);
@@ -216,6 +245,9 @@ export default function PropertyDeck({
       if (tab === 'saved') return saved.includes(l.raia_id);
       if (tab === 'viewings') return false;
 
+      // Sales and rentals never share a card: the feed is checked before anything else.
+      if (feedOf(l) !== feed) return false;
+
       const c = countryOf(l);
       if (c && c !== country) return false;
 
@@ -239,7 +271,7 @@ export default function PropertyDeck({
       }
       return true;
     });
-  }, [listings, country, locations, service, budget, beds, prompt, tab, saved]);
+  }, [listings, country, locations, service, budget, beds, prompt, tab, saved, feed]);
 
   const safeIndex = Math.min(index, Math.max(0, stream.length - 1));
   const current = stream[safeIndex];
@@ -283,7 +315,7 @@ export default function PropertyDeck({
   // Keyboard: arrows move property (↑/↓) or photo (←/→); i/Enter opens details.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (drawer || filterOpen || menuOpen) return;
+      if (drawer || filterOpen || menuOpen || viewerOpen) return;
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
       if (e.key === 'ArrowUp') {
@@ -298,7 +330,7 @@ export default function PropertyDeck({
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [drawer, filterOpen, menuOpen, safeIndex, stream.length]);
+  }, [drawer, filterOpen, menuOpen, viewerOpen, safeIndex, stream.length]);
 
   const emptyCopy =
     tab === 'saved'
@@ -310,37 +342,41 @@ export default function PropertyDeck({
   const budgets = country === 'TH' ? BUDGETS_THB : country === 'MY' ? BUDGETS_MYR : BUDGETS_GBP;
 
   return (
-    <div className="flex h-[100dvh] w-full flex-col bg-[#09090b] text-zinc-100">
+    <div className="flex h-[100dvh] w-full flex-col bg-[var(--bg)] text-[var(--text)]">
       {/* Top bar */}
-      <header className="relative z-30 shrink-0 border-b border-zinc-800/60 bg-[#0a0a0c] px-3 pb-2 pt-3">
-        {/* Desktop nav (≥768px): clean Agents · Charter · Properties + Filter */}
-        <div className="mx-auto hidden md:flex w-full max-w-[600px] items-center justify-between gap-4">
-          <div className="flex items-center gap-6 text-sm font-semibold text-zinc-300">
-            <a href="/registry" className="hover:text-emerald-400 transition-colors">Agents</a>
-            <a href="/charter" className="hover:text-emerald-400 transition-colors">Charter</a>
-            <a href="/app" className="hover:text-emerald-400 transition-colors">Properties</a>
+      <header className="relative z-30 shrink-0 border-b border-[var(--border)] bg-[var(--bg-elev)] px-3 pb-2 pt-3">
+        {/* Desktop nav (≥768px): Agents · Charter · Properties + feed + Filter */}
+        <div className="mx-auto hidden md:flex w-full max-w-[680px] items-center justify-between gap-3">
+          <div className="flex items-center gap-4 text-sm font-semibold text-[var(--text-dim)]">
+            <a href="/registry" className="hover:text-emerald-500 transition-colors">Agents</a>
+            <a href="/charter" className="hover:text-emerald-500 transition-colors">Charter</a>
+            <a href="/app" className="hover:text-emerald-500 transition-colors">Properties</a>
           </div>
-          <button
-            type="button"
-            onClick={() => setFilterOpen(true)}
-            aria-label={`Filter preferences${activeCount ? `, ${activeCount} active` : ''}`}
-            className={`relative flex h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-semibold bg-zinc-900 transition-colors ${
-              activeCount
-                ? 'border-emerald-500 text-emerald-400'
-                : 'border-zinc-800 text-zinc-200 hover:border-emerald-500'
-            }`}
-          >
-            <FilterIcon />
-            <span>Filter</span>
-            {activeCount > 0 && (
-              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-emerald-500 px-1 text-[9px] font-bold text-emerald-950">
-                {activeCount}
-              </span>
-            )}
-          </button>
+          <FeedTabs feed={feed} onChange={pickFeed} />
+          <div className="flex items-center gap-2">
+            <ThemeToggle />
+            <button
+              type="button"
+              onClick={() => setFilterOpen(true)}
+              aria-label={`Filter preferences${activeCount ? `, ${activeCount} active` : ''}`}
+              className={`relative flex h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-semibold bg-[var(--bg-card)] transition-colors ${
+                activeCount
+                  ? 'border-emerald-500 text-emerald-500'
+                  : 'border-[var(--border)] text-[var(--text)] hover:border-emerald-500'
+              }`}
+            >
+              <FilterIcon />
+              <span>Filter</span>
+              {activeCount > 0 && (
+                <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-emerald-500 px-1 text-[9px] font-bold text-emerald-950">
+                  {activeCount}
+                </span>
+              )}
+            </button>
+          </div>
         </div>
 
-        {/* Mobile nav (<768px): compact hamburger + filter */}
+        {/* Mobile nav (<768px): hamburger + feed + filter */}
         <div className="mx-auto flex md:hidden w-full max-w-[420px] items-center justify-between gap-2 relative">
           <div className="relative">
             <button
@@ -348,16 +384,16 @@ export default function PropertyDeck({
               onClick={() => setMenuOpen((v) => !v)}
               aria-expanded={menuOpen}
               aria-label="Menu"
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-zinc-800 bg-zinc-900 text-zinc-200 transition-colors hover:border-emerald-500"
+              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text)] transition-colors hover:border-emerald-500"
             >
               <MenuIcon />
             </button>
 
             {menuOpen && (
-              <nav className="absolute left-0 top-12 z-40 w-[220px] overflow-hidden rounded-2xl border border-white/15 bg-zinc-950/95 backdrop-blur-xl py-2 shadow-2xl">
+              <nav className="absolute left-0 top-12 z-40 w-[220px] overflow-hidden rounded-2xl border border-[var(--border-bright)] bg-[var(--bg-card)] py-2 shadow-2xl">
                 {MENU_SECTIONS.map((section, sIdx) => (
-                  <div key={section.title} className={sIdx > 0 ? 'mt-2 pt-2 border-t border-zinc-800/60' : ''}>
-                    <div className="px-4 py-1 text-[10px] font-bold uppercase tracking-wider text-zinc-500">
+                  <div key={section.title} className={sIdx > 0 ? 'mt-2 pt-2 border-t border-[var(--border)]' : ''}>
+                    <div className="px-4 py-1 text-[10px] font-bold uppercase tracking-wider text-[var(--text-faint)]">
                       {section.title}
                     </div>
                     {section.links.map(([href, label]) => (
@@ -365,7 +401,7 @@ export default function PropertyDeck({
                         key={href}
                         href={href}
                         onClick={() => setMenuOpen(false)}
-                        className="block px-4 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-emerald-500/10 hover:text-emerald-300"
+                        className="block px-4 py-1.5 text-xs font-medium text-[var(--text-dim)] transition-colors hover:bg-emerald-500/10 hover:text-emerald-500"
                       >
                         {label}
                       </a>
@@ -376,14 +412,16 @@ export default function PropertyDeck({
             )}
           </div>
 
+          <FeedTabs feed={feed} onChange={pickFeed} />
+
           <button
             type="button"
             onClick={() => setFilterOpen(true)}
             aria-label={`Filter preferences${activeCount ? `, ${activeCount} active` : ''}`}
-            className={`relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full border bg-zinc-900 transition-colors ${
+            className={`relative flex h-10 w-10 shrink-0 items-center justify-center rounded-full border bg-[var(--bg-card)] transition-colors ${
               activeCount
-                ? 'border-emerald-500 text-emerald-400'
-                : 'border-zinc-800 text-zinc-200 hover:border-emerald-500'
+                ? 'border-emerald-500 text-emerald-500'
+                : 'border-[var(--border)] text-[var(--text)] hover:border-emerald-500'
             }`}
           >
             <FilterIcon />
@@ -444,7 +482,8 @@ export default function PropertyDeck({
               onPrevProperty={() => go(-1)}
               drawer={drawer}
               onDrawerChange={setDrawer}
-              keysEnabled={!filterOpen && !menuOpen}
+              keysEnabled={!filterOpen && !menuOpen && !viewerOpen}
+              onViewerChange={setViewerOpen}
               voiceGender={voiceGender}
               appLang={appLang}
               onSelect={(id) => {
@@ -453,9 +492,9 @@ export default function PropertyDeck({
               }}
             />
           ) : (
-            <div className="flex h-full flex-col items-center justify-center gap-2 rounded-[26px] border border-dashed border-zinc-800 p-8 text-center">
+            <div className="flex h-full flex-col items-center justify-center gap-2 rounded-[26px] border border-dashed border-[var(--border)] p-8 text-center">
               <p className="text-sm font-semibold">{emptyCopy[0]}</p>
-              <p className="text-xs text-zinc-500">{emptyCopy[1]}</p>
+              <p className="text-xs text-[var(--text-faint)]">{emptyCopy[1]}</p>
             </div>
           )}
 
@@ -465,7 +504,7 @@ export default function PropertyDeck({
               type="button"
               onClick={() => go(-1)}
               aria-label="Previous property"
-              className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900/90 text-zinc-200 hover:border-emerald-500 hover:text-emerald-400"
+              className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full border border-[var(--border-bright)] bg-[var(--bg-card)] text-[var(--text)] hover:border-emerald-500 hover:text-emerald-500"
             >
               <ChevronIcon up />
             </button>
@@ -473,13 +512,13 @@ export default function PropertyDeck({
               type="button"
               onClick={() => go(1)}
               aria-label="Next property"
-              className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full border border-zinc-700 bg-zinc-900/90 text-zinc-200 hover:border-emerald-500 hover:text-emerald-400"
+              className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full border border-[var(--border-bright)] bg-[var(--bg-card)] text-[var(--text)] hover:border-emerald-500 hover:text-emerald-500"
             >
               <ChevronIcon />
             </button>
           </div>
         </div>
-        <p className="pt-1 text-center text-[10px] text-zinc-600">
+        <p className="pt-1 text-center text-[10px] text-[var(--text-faint)]">
           {current
             ? `${safeIndex + 1} / ${stream.length} · swipe ↑↓ browse · ←→ pass/save · tap edges for photos`
             : '—'}
@@ -487,7 +526,7 @@ export default function PropertyDeck({
       </main>
 
       {/* Bottom navigation */}
-      <nav className="shrink-0 border-t border-zinc-800/80 bg-[#050507]">
+      <nav className="shrink-0 border-t border-[var(--border)] bg-[var(--bg-elev)]">
         <div className="mx-auto grid w-full max-w-[420px] grid-cols-4 py-2 text-[10px] font-semibold">
           <button
             type="button"
@@ -496,7 +535,7 @@ export default function PropertyDeck({
               setIndex(0);
             }}
             className={`flex flex-col items-center gap-1 ${
-              tab === 'explore' ? 'text-emerald-400' : 'text-zinc-500'
+              tab === 'explore' ? 'text-emerald-500' : 'text-[var(--text-faint)]'
             }`}
           >
             <PlayCircleIcon />
@@ -509,13 +548,13 @@ export default function PropertyDeck({
               setIndex(0);
             }}
             className={`relative flex flex-col items-center gap-1 ${
-              tab === 'saved' ? 'text-emerald-400' : 'text-zinc-500'
+              tab === 'saved' ? 'text-emerald-500' : 'text-[var(--text-faint)]'
             }`}
           >
             <HeartNavIcon active={tab === 'saved'} />
             <div className="flex flex-col items-center">
               <span>Saved</span>
-              <span className="text-[9px] font-normal text-zinc-500 -mt-0.5">Saved on this device</span>
+              <span className="text-[9px] font-normal text-[var(--text-faint)] -mt-0.5">Saved on this device</span>
             </div>
             {saved.length > 0 && (
               <span className="absolute left-1/2 top-0 ml-2.5 rounded-full bg-red-500 px-1.5 text-[9px] leading-4 text-white">
@@ -530,13 +569,13 @@ export default function PropertyDeck({
               setIndex(0);
             }}
             className={`flex flex-col items-center gap-1 ${
-              tab === 'viewings' ? 'text-emerald-400' : 'text-zinc-500'
+              tab === 'viewings' ? 'text-emerald-500' : 'text-[var(--text-faint)]'
             }`}
           >
             <CalendarIcon />
             Viewings
           </button>
-          <a href="/registry" className="flex flex-col items-center gap-1 text-zinc-500 hover:text-emerald-400">
+          <a href="/registry" className="flex flex-col items-center gap-1 text-[var(--text-faint)] hover:text-emerald-500">
             <ShieldIcon />
             Agents
           </a>
@@ -554,20 +593,31 @@ export default function PropertyDeck({
         >
           <div
             onClick={(e) => e.stopPropagation()}
-            className="max-h-[90dvh] overflow-y-auto rounded-t-3xl border-t border-white/15 bg-zinc-950/95 backdrop-blur-xl p-5 shadow-2xl [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            className="max-h-[90dvh] overflow-y-auto rounded-t-3xl border-t border-[var(--border-bright)] bg-[var(--bg-card)] p-5 shadow-2xl [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           >
             <div className="mx-auto mb-3 flex w-full max-w-[420px] items-center justify-between">
               <h2 className="text-sm font-bold">Discovery settings</h2>
               <button
                 type="button"
                 onClick={() => setFilterOpen(false)}
-                className="rounded-full bg-white px-4 py-1.5 text-xs font-bold text-black"
+                className="rounded-full bg-[var(--text)] px-4 py-1.5 text-xs font-bold text-[var(--bg)]"
               >
                 Done
               </button>
             </div>
 
             <div className="mx-auto w-full max-w-[420px] space-y-4">
+              <Section title="Appearance">
+                <PillRow
+                  options={[
+                    ['light', 'Light'],
+                    ['dark', 'Dark']
+                  ]}
+                  value={mounted && resolvedTheme === 'dark' ? 'dark' : 'light'}
+                  onChange={(v) => setTheme(String(v))}
+                />
+              </Section>
+
               <Section title="Language">
                 <PillRow
                   options={[
@@ -587,7 +637,7 @@ export default function PropertyDeck({
                   value={country}
                   onChange={(e) => handleCountryChange(e.target.value as Country)}
                   aria-label="Country"
-                  className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs font-semibold text-zinc-100 outline-none focus:border-emerald-500"
+                  className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-elev)] px-3 py-2 text-xs font-semibold text-[var(--text)] outline-none focus:border-emerald-500"
                 >
                   <option value="MY">Malaysia</option>
                   <option value="TH">Thailand</option>
@@ -597,7 +647,7 @@ export default function PropertyDeck({
 
               <Section title="Locations">
                 <div className="relative min-w-0">
-                  <div className="flex flex-wrap items-center gap-1.5 rounded-2xl border border-zinc-800 bg-zinc-900/70 p-2 focus-within:border-emerald-500">
+                  <div className="flex flex-wrap items-center gap-1.5 rounded-2xl border border-[var(--border)] bg-[var(--bg-elev)] p-2 focus-within:border-emerald-500">
                     {locations.map((loc) => (
                       <span
                         key={loc}
@@ -630,19 +680,19 @@ export default function PropertyDeck({
                       }}
                       placeholder={locations.length ? 'Add another location…' : 'Search locations… e.g. Fulham, Thonglor'}
                       aria-label="Search locations"
-                      className="min-w-[7rem] flex-1 bg-transparent px-1 py-0.5 text-xs text-zinc-100 outline-none placeholder:text-zinc-500"
+                      className="min-w-[7rem] flex-1 bg-transparent px-1 py-0.5 text-xs text-[var(--text)] outline-none placeholder:text-[var(--text-faint)]"
                     />
                   </div>
 
                   {modalLocPicking && suggestions.length > 0 && (
-                    <ul className="absolute inset-x-0 top-full z-40 mt-1 max-h-56 overflow-y-auto rounded-xl border border-zinc-800 bg-[#0a0a0c] py-1 shadow-2xl [scrollbar-width:none]">
+                    <ul className="absolute inset-x-0 top-full z-40 mt-1 max-h-56 overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--bg-card)] py-1 shadow-2xl [scrollbar-width:none]">
                       {suggestions.map((opt) => (
                         <li key={opt}>
                           <button
                             type="button"
                             onMouseDown={(e) => e.preventDefault()}
                             onClick={() => pickLocation(opt)}
-                            className="block w-full px-3 py-1.5 text-left text-xs font-semibold text-zinc-300 hover:bg-emerald-500/15 hover:text-emerald-300"
+                            className="block w-full px-3 py-1.5 text-left text-xs font-semibold text-[var(--text-dim)] hover:bg-emerald-500/15 hover:text-emerald-500"
                           >
                             {opt}
                           </button>
@@ -681,9 +731,9 @@ export default function PropertyDeck({
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
                   placeholder="e.g. balcony, garden, near tube"
-                  className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2.5 text-xs outline-none placeholder:text-zinc-500 focus:border-emerald-500"
+                  className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-elev)] px-3 py-2.5 text-xs outline-none placeholder:text-[var(--text-faint)] focus:border-emerald-500"
                 />
-                <p className="mt-1 text-[10px] text-zinc-500">
+                <p className="mt-1 text-[10px] text-[var(--text-faint)]">
                   Filters features, headlines and descriptions as you type.
                 </p>
               </Section>
@@ -699,7 +749,7 @@ export default function PropertyDeck({
                   setPrompt('');
                   pickVoice('female');
                 }}
-                className="w-full rounded-full border border-zinc-800 py-2 text-[11px] font-semibold text-zinc-400 hover:text-zinc-200"
+                className="w-full rounded-full border border-[var(--border)] py-2 text-[11px] font-semibold text-[var(--text-dim)] hover:text-[var(--text)]"
               >
                 Reset filters
               </button>
@@ -714,9 +764,40 @@ export default function PropertyDeck({
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section>
-      <h3 className="mb-2 text-[10px] font-bold uppercase tracking-wide text-zinc-500">{title}</h3>
+      <h3 className="mb-2 text-[10px] font-bold uppercase tracking-wide text-[var(--text-faint)]">{title}</h3>
       {children}
     </section>
+  );
+}
+
+function FeedTabs({ feed, onChange }: { feed: Feed; onChange: (f: Feed) => void }) {
+  const feeds: [Feed, string][] = [
+    ['sales', 'Sales'],
+    ['rentals', 'Rentals']
+  ];
+  return (
+    <div
+      role="tablist"
+      aria-label="Property feed"
+      className="flex items-center gap-0.5 rounded-full border border-[var(--border)] bg-[var(--bg-card)] p-0.5"
+    >
+      {feeds.map(([id, label]) => (
+        <button
+          key={id}
+          type="button"
+          role="tab"
+          aria-selected={feed === id}
+          onClick={() => onChange(id)}
+          className={`rounded-full px-3 py-1 text-[11px] font-bold transition-colors ${
+            feed === id
+              ? 'bg-emerald-500 text-emerald-950'
+              : 'text-[var(--text-dim)] hover:text-[var(--text)]'
+          }`}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -740,7 +821,7 @@ function PillRow({
           className={`rounded-full border px-3 py-1.5 text-[11px] font-semibold ${
             value === id
               ? 'border-emerald-500 bg-emerald-500 text-emerald-950'
-              : 'border-zinc-800 bg-zinc-900 text-zinc-400'
+              : 'border-[var(--border)] bg-[var(--bg-elev)] text-[var(--text-dim)]'
           }`}
         >
           {label}
