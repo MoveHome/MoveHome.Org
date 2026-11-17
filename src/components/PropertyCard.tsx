@@ -5,6 +5,7 @@
 // viewing slot sheet, clickable Estate Agent pill, and Giraffe 360 virtual tour modal.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import type { Listing } from '@/lib/types';
 import { getEstateAgentProfile } from '@/lib/agent-directory';
 import { classifyGesture } from '@/lib/gesture';
@@ -409,13 +410,13 @@ export default function PropertyCard({
 
   const vacant = isVacant(listing);
 
-  const location = [listing.building_number, listing.street_name, listing.suburb, listing.postcode_full]
-    .filter(Boolean)
-    .join(', ');
+  // Address obfuscation: display obfuscated public area strings (e.g. Fitzrovia, London E3). Never expose flat/door numbers.
+  const publicAreaLocation = [listing.suburb, listing.un_locode ? areaOf(listing) : null, listing.postcode_district].filter(Boolean).join(', ') || areaOf(listing);
+
   const mapsHref = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
     listing.latitude != null && listing.longitude != null
       ? `${listing.latitude},${listing.longitude}`
-      : location || titleOf(listing)
+      : publicAreaLocation || titleOf(listing)
   )}`;
 
   return (
@@ -493,14 +494,28 @@ export default function PropertyCard({
               </div>
             );
           }
+          const isFloorplanOrEpc = s.kind === 'floorplan' || /floorplan|floor_plan|epc/i.test(s.url);
           return (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              key={`${s.url}-${i}`}
-              src={s.url}
-              alt={`${titleOf(listing)} — ${s.kind === 'floorplan' ? 'floorplan' : `photo ${i + 1}`}`}
-              className={`absolute inset-0 h-full w-full object-cover ${hidden}`}
-            />
+            <div key={`${s.url}-${i}`} className={`absolute inset-0 h-full w-full ${hidden}`}>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={s.url}
+                alt={`${titleOf(listing)} — ${s.kind === 'floorplan' ? 'floorplan' : `photo ${i + 1}`}`}
+                className={`h-full w-full ${isFloorplanOrEpc ? 'object-contain bg-zinc-950/80' : 'object-cover'}`}
+              />
+              {isFloorplanOrEpc && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    openViewer({ kind: 'tour360', url: s.url });
+                  }}
+                  className="pointer-events-auto absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full border border-white/30 bg-black/75 px-3 py-1.5 text-xs font-semibold text-white backdrop-blur shadow-lg hover:bg-black/90 transition"
+                >
+                  🔍 Tap to Expand
+                </button>
+              )}
+            </div>
           );
         })}
       </div>
@@ -525,9 +540,56 @@ export default function PropertyCard({
         </div>
       )}
 
+      {/* ── Top Bar Header: Agent Logo Pill (Top-Left) & Floating Badges ── */}
+      <div className="pointer-events-none absolute inset-x-3 top-6 z-20 flex items-center justify-between gap-2">
+        {/* Top-Left Agent Storefront Pill Overlay */}
+        <div className="pointer-events-auto">
+          {agentProfile ? (
+            <Link
+              href={`/${agentProfile.slug}`}
+              className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-950/80 px-3 py-1.5 text-xs font-semibold text-emerald-300 backdrop-blur hover:bg-emerald-900/80 transition shadow-lg"
+              aria-label={`View ${agentProfile.name} Storefront`}
+            >
+              {(listing.agent_logo_url || agentProfile.logo_url) ? (
+                <span className="flex h-5 items-center rounded bg-white/90 px-1">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={listing.agent_logo_url || agentProfile.logo_url!}
+                    alt={agentProfile.name}
+                    className="h-4 w-auto object-contain max-w-[90px]"
+                  />
+                </span>
+              ) : (
+                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-700 text-[9px] font-bold text-white">
+                  {agentProfile.name.slice(0, 2).toUpperCase()}
+                </span>
+              )}
+              <span className="truncate max-w-[120px] sm:max-w-[160px] text-[11px]">{agentProfile.name}</span>
+            </Link>
+          ) : (
+            <div />
+          )}
+        </div>
 
+        {/* Top-Right Details Button */}
+        <div className="pointer-events-auto">
+          <DescriptionToggleButton open={false} onClick={() => onDrawerChange(true)} />
+        </div>
+      </div>
 
-      {/* ── HUD ──────────────────────────────────────────────────────── */}
+      {/* Floating Media Badges on Top-Center */}
+      <div className="pointer-events-none absolute inset-x-0 top-16 z-20 flex items-center justify-center gap-2">
+        {listing.video_url && (
+          <span className="inline-flex items-center gap-1 rounded-full border border-purple-500/40 bg-purple-950/85 px-2.5 py-0.5 text-[10px] font-bold text-purple-300 backdrop-blur shadow-md">
+            🎥 Video Tour
+          </span>
+        )}
+        {slides.some((s) => s.kind === 'tour360') && (
+          <span className="inline-flex items-center gap-1 rounded-full border border-cyan-500/40 bg-cyan-950/85 px-2.5 py-0.5 text-[10px] font-bold text-cyan-300 backdrop-blur shadow-md">
+            🔄 360° Virtual Tour
+          </span>
+        )}
+      </div>
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black via-black/75 to-transparent px-4 pb-4 pt-28">
         <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1 text-[11px] font-bold text-zinc-950">
           <span className={`h-2 w-2 rounded-full ${vacant ? 'bg-emerald-500' : 'bg-amber-500'}`} />
@@ -537,40 +599,6 @@ export default function PropertyCard({
           {priceLabel(listing)}
         </div>
         <div className="mt-1 text-sm font-semibold text-zinc-200">{titleOf(listing)}</div>
-
-        {/* Estate Agent HUD Pill — 360 and video live in the carousel as posters */}
-        {agentProfile && (
-          <div className="pointer-events-auto mt-2.5 flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              data-testid="estate-agent-pill"
-              onClick={() => setAgentModalOpen(true)}
-              aria-label={agentProfile.name}
-              title={agentProfile.name}
-              className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-950/80 px-3.5 py-1.5 text-[11px] font-semibold text-emerald-300 backdrop-blur hover:bg-emerald-900/80 transition"
-            >
-              {(listing.agent_logo_url || agentProfile.logo_url) ? (
-                // Logos are usually dark on transparent; a light plate keeps them
-                // legible over the photo in both themes.
-                <span className="flex h-5 items-center rounded bg-white/90 px-1">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={listing.agent_logo_url || agentProfile.logo_url!}
-                    alt={agentProfile.name}
-                    className="h-4 w-auto object-contain max-w-[100px]"
-                  />
-                </span>
-              ) : (
-                <>
-                  <span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-700 text-[9px] font-bold text-white">
-                    {agentProfile.name.slice(0, 2).toUpperCase()}
-                  </span>
-                  <span>{agentProfile.name}</span>
-                </>
-              )}
-            </button>
-          </div>
-        )}
 
         {/* 5 standard action circles */}
         <div className="pointer-events-auto mt-4 flex items-center justify-center gap-3">
@@ -607,9 +635,6 @@ export default function PropertyCard({
       </div>
 
       {/* Details button → drawer (anchored at top-right below story bars) */}
-      <div className="absolute right-3 top-6 z-20">
-        <DescriptionToggleButton open={false} onClick={() => onDrawerChange(true)} />
-      </div>
 
       {/* ── State 2: expanded description drawer ─────────────────────── */}
       {drawer && (
@@ -651,29 +676,69 @@ export default function PropertyCard({
           </div>
 
           <div className="space-y-3 p-3">
-            <Card title="Estate Agent &amp; Virtual Tour">
-              <div className="flex flex-wrap gap-2 items-center">
-                {agentProfile && (
-                  <button
-                    type="button"
-                    data-testid="estate-agent-pill"
-                    onClick={() => setAgentModalOpen(true)}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-950/80 px-3 py-1 text-[11px] font-semibold text-emerald-300 hover:bg-emerald-900/80 transition"
-                  >
-                    Listed by {agentProfile.name} · Verified ↗
-                  </button>
-                )}
+            {/* Estate Agent Section with Prominent CTAs */}
+            <Card title="Estate Agent &amp; Action Center">
+              <div className="space-y-3">
+                {agentProfile ? (
+                  <div className="flex flex-col gap-2 rounded-xl border border-zinc-800/80 bg-zinc-900/60 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-2.5">
+                        {(listing.agent_logo_url || agentProfile.logo_url) ? (
+                          <span className="flex h-7 items-center rounded bg-white/90 px-1.5 shadow-sm">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={listing.agent_logo_url || agentProfile.logo_url!}
+                              alt={agentProfile.name}
+                              className="h-5 w-auto object-contain max-w-[110px]"
+                            />
+                          </span>
+                        ) : (
+                          <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-700 text-xs font-bold text-white">
+                            {agentProfile.name.slice(0, 2).toUpperCase()}
+                          </span>
+                        )}
+                        <div>
+                          <h4 className="text-xs font-bold text-white">{agentProfile.name}</h4>
+                          <p className="text-[11px] text-zinc-400">{agentProfile.business_address || 'Fitzrovia, London'}</p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setAgentModalOpen(true)}
+                        className="rounded-lg border border-emerald-500/30 bg-emerald-950/60 px-2.5 py-1 text-[11px] font-semibold text-emerald-300 hover:bg-emerald-900/60 transition"
+                      >
+                        Profile ↗
+                      </button>
+                    </div>
 
-                {listing.tour_360_url && (
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      <span className="inline-flex items-center gap-1 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-400">
+                        ✓ Signed A2A Card
+                      </span>
+                      <span className="inline-flex items-center gap-1 rounded-full border border-blue-500/30 bg-blue-500/10 px-2 py-0.5 text-[10px] font-semibold text-blue-400">
+                        ✓ Domain Verified
+                      </span>
+                    </div>
+                  </div>
+                ) : null}
+
+                {/* Prominent CTAs */}
+                <div className="grid grid-cols-2 gap-2 pt-1">
                   <button
                     type="button"
-                    data-testid="giraffe-360-btn"
-                    onClick={() => openViewer({ kind: 'tour360', url: listing.tour_360_url! })}
-                    className="inline-flex items-center gap-1.5 rounded-full border border-cyan-400/40 bg-cyan-950/80 px-3 py-1 text-[11px] font-bold text-cyan-300 hover:bg-cyan-900/80 transition"
+                    onClick={() => setSheet(true)}
+                    className="flex items-center justify-center gap-1.5 rounded-xl bg-emerald-600 py-2.5 text-xs font-bold text-white shadow-lg hover:bg-emerald-500 transition"
                   >
-                    🌐 360° Giraffe Tour
+                    📅 Book Viewing
                   </button>
-                )}
+                  <button
+                    type="button"
+                    onClick={() => setSheet(true)}
+                    className="flex items-center justify-center gap-1.5 rounded-xl border border-zinc-700 bg-zinc-800 py-2.5 text-xs font-bold text-zinc-100 hover:bg-zinc-700 transition"
+                  >
+                    💬 Make Enquiry
+                  </button>
+                </div>
               </div>
             </Card>
 
@@ -696,7 +761,7 @@ export default function PropertyCard({
 
             <Card title="Location &amp; Google Maps">
               <p className="text-xs leading-relaxed text-[var(--text-dim)]">
-                {[titleOf(listing), areaOf(listing), listing.postcode_full].filter(Boolean).join(' · ')}
+                {publicAreaLocation}
               </p>
               <a
                 href={mapsHref}
@@ -707,6 +772,13 @@ export default function PropertyCard({
                 Open in Google Maps ↗
               </a>
             </Card>
+
+            {/* Ref pill positioned immediately BEFORE Similar Properties Nearby */}
+            <div className="flex items-center gap-2 py-1">
+              <span className="text-xs text-[var(--text-dim)] font-mono">
+                Ref: {listing.external_id ?? getCrmRef(listing)}
+              </span>
+            </div>
 
             {similar.length > 0 && (
               <Card title="Similar Properties Nearby">
@@ -740,13 +812,6 @@ export default function PropertyCard({
                 ))}
               </Card>
             )}
-
-            <Card title="Technical / AI Reference">
-              <div className="flex flex-wrap items-center gap-2">
-                <CrmRefPill refId={listing.external_id ?? getCrmRef(listing)} />
-                <RefPill id={listing.raia_id} />
-              </div>
-            </Card>
           </div>
         </div>
       )}
