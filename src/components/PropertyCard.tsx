@@ -20,7 +20,8 @@ import {
   ttsLocaleOf,
   viewingSlots,
   voiceMatchesGender,
-  youtubeIdOf
+  youtubeIdOf,
+  type AppLang
 } from '@/lib/property-card';
 
 // ── Component ─────────────────────────────────────────────────────────────
@@ -40,13 +41,14 @@ interface Props {
   onDrawerChange: (open: boolean) => void;
   keysEnabled?: boolean;
   voiceGender?: 'female' | 'male';
+  appLang?: AppLang;
   onFilterByAgent?: (agentId: string) => void;
 }
 
-type Slide = { kind: 'video' | 'photo'; url: string };
+type MediaItem = { kind: 'video' | 'photo'; url: string };
 type Narration = 'idle' | 'loading' | 'playing';
 
-function slidesOf(l: Listing): Slide[] {
+function slidesOf(l: Listing): MediaItem[] {
   const photos = (l.photos?.length
     ? [...l.photos].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)).map((p) => p.url)
     : [l.photo_url, l.featured_image_url]
@@ -89,10 +91,13 @@ export default function PropertyCard({
   onDrawerChange,
   keysEnabled = true,
   voiceGender = 'female',
+  appLang = 'en',
   onFilterByAgent
 }: Props) {
   const slides = useMemo(() => slidesOf(listing), [listing]);
-  const [slide, setSlide] = useState(0);
+  const [activeSlideIndex, setActiveSlideIndex] = useState(0);
+  const setMediaSlideIndex = setActiveSlideIndex;
+  const slide = activeSlideIndex;
   const [narration, setNarration] = useState<Narration>('idle');
   const [sheet, setSheet] = useState(false);
   const [agentModalOpen, setAgentModalOpen] = useState(false);
@@ -124,8 +129,8 @@ export default function PropertyCard({
     else v.pause();
   }, [slide, slides]);
 
-  const next = () => setSlide((s) => Math.min(slides.length - 1, s + 1));
-  const prev = () => setSlide((s) => Math.max(0, s - 1));
+  const next = () => setMediaSlideIndex((s) => Math.min(slides.length - 1, s + 1));
+  const prev = () => setMediaSlideIndex((s) => Math.max(0, s - 1));
 
   // Photo arrows only — property up/down live on the deck so they survive the card.
   useEffect(() => {
@@ -167,13 +172,20 @@ export default function PropertyCard({
     stopNarration();
   }, [listing.raia_id, drawer, stopNarration]);
 
-  const locale = ttsLocaleOf(listing);
+  const localeMap: Record<AppLang, import('@/lib/property-card').TtsLocale> = {
+    en: 'en-GB',
+    th: 'th-TH',
+    ja: 'ja-JP',
+    ms: 'ms-MY',
+    zh: 'zh-CN'
+  };
+  const locale = localeMap[appLang] || ttsLocaleOf(listing);
 
   function speakLocal() {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(
-      buildPropertyDescriptionWithCta(listing, agentProfile?.name)
+      buildPropertyDescriptionWithCta(listing, agentProfile?.name, appLang)
     );
     u.lang = locale;
     const voices = window.speechSynthesis
@@ -381,7 +393,7 @@ export default function PropertyCard({
   const showSaveBadge = (isDragging && dragOffset.x > 35 && Math.abs(dragOffset.x) >= Math.abs(dragOffset.y)) || animatingExit === 'save';
 
   const vacant = isVacant(listing);
-  const isVideoSlide = slides[slide]?.kind === 'video';
+  const isVideoSlide = slides[activeSlideIndex]?.kind === 'video';
 
   const location = [listing.building_number, listing.street_name, listing.suburb, listing.postcode_full]
     .filter(Boolean)
@@ -468,15 +480,7 @@ export default function PropertyCard({
         </div>
       )}
 
-      {/* Slide badge */}
-      {slides.length > 0 && (
-        <div className="pointer-events-none absolute left-3 top-7 z-20 inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-zinc-950/80 px-3 py-1 text-[11px] font-bold backdrop-blur">
-          <span
-            className={`h-[7px] w-[7px] rounded-full ${isVideoSlide ? 'bg-emerald-400' : 'bg-amber-400'}`}
-          />
-          Slide {slide + 1}/{slides.length} · {isVideoSlide ? 'Video Tour' : 'Photo'}
-        </div>
-      )}
+
 
       {/* YouTube tour opens in its own player */}
       {youtubeId && (
@@ -502,23 +506,6 @@ export default function PropertyCard({
           {priceLabel(listing)}
         </div>
         <div className="mt-1 text-sm font-semibold text-zinc-200">{titleOf(listing)}</div>
-        <div className="mt-1 text-xs font-bold text-zinc-300">
-          ✓ {listing.video_url ? 'Video Tour + ' : ''}
-          {listing.photos.length} Photos · {listing.service_type === 'sale' ? 'Sales' : 'Lettings'}
-        </div>
-
-        {specGroups(listing).length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {specGroups(listing).map((s) => (
-              <span
-                key={s}
-                className="rounded-full border border-white/15 bg-zinc-900/85 px-3 py-1 text-[11px] font-semibold text-zinc-100"
-              >
-                <span className="font-extrabold text-amber-400">✓</span> {s}
-              </span>
-            ))}
-          </div>
-        )}
 
         {/* Giraffe 360 & Estate Agent HUD Pills */}
         <div className="pointer-events-auto mt-2.5 flex flex-wrap items-center gap-2">
@@ -538,9 +525,17 @@ export default function PropertyCard({
               type="button"
               data-testid="estate-agent-pill"
               onClick={() => setAgentModalOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-950/80 px-3 py-1 text-[11px] font-semibold text-emerald-300 backdrop-blur hover:bg-emerald-900/80 transition"
+              className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-950/80 px-3.5 py-1.5 text-[11px] font-semibold text-emerald-300 backdrop-blur hover:bg-emerald-900/80 transition"
             >
-              <span>Listed by {agentProfile.name} · Verified ↗</span>
+              {(listing.agent_logo_url || agentProfile.logo_url) ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={listing.agent_logo_url || agentProfile.logo_url!} alt={agentProfile.name} className="h-4 w-auto object-contain max-w-[100px]" />
+              ) : (
+                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-700 text-[9px] font-bold text-white">
+                  {agentProfile.name.slice(0, 2).toUpperCase()}
+                </span>
+              )}
+              <span>{agentProfile.name}</span>
             </button>
           )}
         </div>
@@ -662,7 +657,7 @@ export default function PropertyCard({
 
             <Card title="About this property">
               <p className="text-xs leading-relaxed text-white/70">
-                {buildPropertyDescriptionWithCta(listing, agentProfile?.name)}
+                {buildPropertyDescriptionWithCta(listing, agentProfile?.name, appLang)}
               </p>
             </Card>
 

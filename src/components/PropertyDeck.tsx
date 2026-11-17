@@ -14,11 +14,13 @@ import {
   priceMyr,
   priceThb,
   clusterOf,
-  ttsLocaleOf
+  ttsLocaleOf,
+  type AppLang
 } from '@/lib/property-card';
 
 const SAVED_KEY = 'movehome.saved.v1';
 const VOICE_KEY = 'movehome.voice.v1';
+const LANG_KEY = 'movehome.lang.v1';
 
 type Tab = 'explore' | 'saved' | 'viewings';
 type Service = 'all' | 'long_term' | 'short_term' | 'sale';
@@ -111,6 +113,7 @@ export default function PropertyDeck({
   const [beds, setBeds] = useState(-1);
   const [prompt, setPrompt] = useState('');
   const [voiceGender, setVoiceGender] = useState<'female' | 'male'>('female');
+  const [appLang, setAppLang] = useState<AppLang>('en');
   const [modalLocQuery, setModalLocQuery] = useState('');
   const [modalLocPicking, setModalLocPicking] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
@@ -126,7 +129,20 @@ export default function PropertyDeck({
   useEffect(() => {
     setSaved(readSaved());
     if (localStorage.getItem(VOICE_KEY) === 'male') setVoiceGender('male');
+    const storedLang = localStorage.getItem(LANG_KEY) as AppLang | null;
+    if (storedLang && ['en', 'th', 'ja', 'ms', 'zh'].includes(storedLang)) {
+      setAppLang(storedLang);
+    }
   }, []);
+
+  function pickLang(l: AppLang) {
+    setAppLang(l);
+    try {
+      localStorage.setItem(LANG_KEY, l);
+    } catch {
+      /* private mode — keep in-memory only */
+    }
+  }
 
   function pickVoice(g: 'female' | 'male') {
     setVoiceGender(g);
@@ -250,13 +266,14 @@ export default function PropertyDeck({
     }
     // N+1 audio prefetch with cancellation signal to prevent runaway/overlapping fetches
     const controller = new AbortController();
-    const lang = ttsLocaleOf(nextListing);
+    const langMap: Record<AppLang, string> = { en: 'en-GB', th: 'th-TH', ja: 'ja-JP', ms: 'ms-MY', zh: 'zh-CN' };
+    const lang = langMap[appLang] || ttsLocaleOf(nextListing);
     fetch(
       `/api/tts?raia_id=${encodeURIComponent(nextListing.raia_id)}&lang=${lang}&gender=${voiceGender}`,
       { signal: controller.signal }
     ).catch(() => {});
     return () => controller.abort();
-  }, [stream, safeIndex, voiceGender]);
+  }, [stream, safeIndex, voiceGender, appLang]);
 
   const go = (delta: number) => {
     setDrawer(false);
@@ -294,9 +311,37 @@ export default function PropertyDeck({
 
   return (
     <div className="flex h-[100dvh] w-full flex-col bg-[#09090b] text-zinc-100">
-      {/* Top bar: hamburger button (left) · filter settings button (right) */}
+      {/* Top bar */}
       <header className="relative z-30 shrink-0 border-b border-zinc-800/60 bg-[#0a0a0c] px-3 pb-2 pt-3">
-        <div className="mx-auto flex w-full max-w-[420px] items-center justify-between gap-2 relative">
+        {/* Desktop nav (≥768px): clean Agents · Charter · Properties + Filter */}
+        <div className="mx-auto hidden md:flex w-full max-w-[600px] items-center justify-between gap-4">
+          <div className="flex items-center gap-6 text-sm font-semibold text-zinc-300">
+            <a href="/registry" className="hover:text-emerald-400 transition-colors">Agents</a>
+            <a href="/charter" className="hover:text-emerald-400 transition-colors">Charter</a>
+            <a href="/app" className="hover:text-emerald-400 transition-colors">Properties</a>
+          </div>
+          <button
+            type="button"
+            onClick={() => setFilterOpen(true)}
+            aria-label={`Filter preferences${activeCount ? `, ${activeCount} active` : ''}`}
+            className={`relative flex h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-semibold bg-zinc-900 transition-colors ${
+              activeCount
+                ? 'border-emerald-500 text-emerald-400'
+                : 'border-zinc-800 text-zinc-200 hover:border-emerald-500'
+            }`}
+          >
+            <FilterIcon />
+            <span>Filter</span>
+            {activeCount > 0 && (
+              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-emerald-500 px-1 text-[9px] font-bold text-emerald-950">
+                {activeCount}
+              </span>
+            )}
+          </button>
+        </div>
+
+        {/* Mobile nav (<768px): compact hamburger + filter */}
+        <div className="mx-auto flex md:hidden w-full max-w-[420px] items-center justify-between gap-2 relative">
           <div className="relative">
             <button
               type="button"
@@ -401,6 +446,7 @@ export default function PropertyDeck({
               onDrawerChange={setDrawer}
               keysEnabled={!filterOpen && !menuOpen}
               voiceGender={voiceGender}
+              appLang={appLang}
               onSelect={(id) => {
                 const i = stream.findIndex((l) => l.raia_id === id);
                 if (i >= 0) go(i - safeIndex);
@@ -522,6 +568,20 @@ export default function PropertyDeck({
             </div>
 
             <div className="mx-auto w-full max-w-[420px] space-y-4">
+              <Section title="Language">
+                <PillRow
+                  options={[
+                    ['en', 'English'],
+                    ['th', 'ไทย'],
+                    ['ja', '日本語'],
+                    ['ms', 'Bahasa Melayu'],
+                    ['zh', '中文']
+                  ]}
+                  value={appLang}
+                  onChange={(v) => pickLang(v as AppLang)}
+                />
+              </Section>
+
               <Section title="Country">
                 <select
                   value={country}

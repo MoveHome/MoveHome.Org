@@ -11,6 +11,7 @@ export interface EstateAgentProfile {
   website: string;
   licences: string[];
   agent_card_url: string;
+  logo_url?: string | null;
   verified: boolean;
 }
 

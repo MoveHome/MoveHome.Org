@@ -66,6 +66,23 @@ export default async function RegistryPage({
   return (
     <main className="max-w-6xl mx-auto px-4 py-10">
       <header className="mb-6">
+        <div className="mb-6 rounded-xl border border-[var(--accent)]/30 bg-[var(--accent)]/10 p-4 sm:p-6">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-bold text-[var(--text)]">Are you an Estate Agent?</h2>
+              <p className="text-sm text-[var(--text-dim)] mt-1">
+                Publish your listings free — no portal fees, no middleman. Connect your AI feed in 5 minutes.
+              </p>
+            </div>
+            <Link
+              href="/register"
+              className="shrink-0 rounded-lg bg-[var(--accent)] px-4 py-2 text-sm font-bold text-white dark:text-black hover:bg-[var(--accent-hover)] transition-colors"
+            >
+              Register Your Agency →
+            </Link>
+          </div>
+        </div>
+
         <h1 className="text-3xl font-semibold">Real-Estate A2A Agent Registry</h1>
         <p className="text-[var(--text-dim)] mt-2 max-w-2xl">
           A public directory of property agents that speak the Agent2Agent (A2A) protocol — discoverable,
