@@ -17,7 +17,7 @@ export const metadata = {
 const SERVICE_TYPES = ['long_term', 'short_term', 'sale'];
 const PAGE_SIZE = 24;
 
-export function AgentTile({ a }: { a: PublicRegistryAgent }) {
+function AgentTile({ a }: { a: PublicRegistryAgent }) {
   const badge = healthBadge(a);
   const skillCount = Array.isArray(a.skills) ? a.skills.length : 0;
   const iconUrl = safeHref(a.icon_url);
