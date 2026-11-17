@@ -227,6 +227,7 @@ export default function PropertyDeck({
 
   const safeIndex = Math.min(index, Math.max(0, stream.length - 1));
   const current = stream[safeIndex];
+  const nextListing = stream[safeIndex + 1];
 
   // A filter change invalidates the position in the stream.
   useEffect(() => {
@@ -353,6 +354,35 @@ export default function PropertyDeck({
       {/* Deck viewport: full height on mobile, 375–420px card column on desktop */}
       <main className="mx-auto flex w-full max-w-[420px] flex-1 flex-col px-3 pb-2 pt-1 min-h-0">
         <div className="relative flex-1 min-h-0">
+          {/* Peeking Next Property Card (Deck Stack Depth) */}
+          {nextListing && (
+            <div
+              className="absolute inset-0 origin-bottom transform transition-all duration-300 ease-out"
+              inert
+              aria-hidden="true"
+              style={{
+                transform: 'scale(0.95) translateY(12px)',
+                opacity: 0.6,
+                pointerEvents: 'none'
+              }}
+            >
+              <PropertyCard
+                listing={nextListing}
+                saved={saved.includes(nextListing.raia_id)}
+                onToggleSave={() => {}}
+                onSave={() => {}}
+                onPass={() => {}}
+                onRewind={() => {}}
+                onNextProperty={() => {}}
+                onPrevProperty={() => {}}
+                onSelect={() => {}}
+                drawer={false}
+                onDrawerChange={() => {}}
+                keysEnabled={false}
+              />
+            </div>
+          )}
+          {/* Active Property Card */}
           {current ? (
             <PropertyCard
               key={current.raia_id}
@@ -362,8 +392,11 @@ export default function PropertyDeck({
               )}
               saved={saved.includes(current.raia_id)}
               onToggleSave={toggleSave}
+              onSave={() => go(1)}
               onPass={() => go(1)}
               onRewind={() => go(-1)}
+              onNextProperty={() => go(1)}
+              onPrevProperty={() => go(-1)}
               drawer={drawer}
               onDrawerChange={setDrawer}
               keysEnabled={!filterOpen && !menuOpen}
@@ -402,7 +435,7 @@ export default function PropertyDeck({
         </div>
         <p className="pt-1 text-center text-[10px] text-zinc-600">
           {current
-            ? `${safeIndex + 1} / ${stream.length} · swipe up for next, down for previous`
+            ? `${safeIndex + 1} / ${stream.length} · swipe ↑↓ browse · ←→ pass/save · tap edges for photos`
             : '—'}
         </p>
       </main>
