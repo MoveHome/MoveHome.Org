@@ -23,6 +23,15 @@ export function hostOf(url?: string | null): string | null {
   }
 }
 
+export function getMonogram(name?: string | null, fallback = 'AG'): string {
+  if (!name || !name.trim()) return fallback;
+  const parts = name.trim().split(/\s+/);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+  return name.trim().slice(0, 2).toUpperCase();
+}
+
 export interface HealthBadge {
   text: string;
   cls: string;

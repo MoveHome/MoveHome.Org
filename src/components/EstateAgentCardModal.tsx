@@ -1,8 +1,8 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import Link from 'next/link';
-import { getEstateAgentProfile } from '@/lib/agent-directory';
+import { getEstateAgentProfile, EstateAgentProfile } from '@/lib/agent-directory';
 
 interface Props {
   agentId: string;
@@ -12,10 +12,48 @@ interface Props {
 }
 
 export default function EstateAgentCardModal({ agentId, open, onClose, onFilterByAgent }: Props) {
-  if (!open) return null;
-
   const profile = getEstateAgentProfile(agentId);
-  if (!profile) return null;
+  const [logoUrl, setLogoUrl] = useState<string>(profile?.logo_url || '');
+  const [uploading, setUploading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  if (!open || !profile) return null;
+
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    setUploadError(null);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/api/upload-logo', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (res.ok && data.logoUrl) {
+        setLogoUrl(data.logoUrl);
+      } else {
+        setUploadError(data.error || 'Upload failed');
+      }
+    } catch {
+      setUploadError('Network error uploading logo');
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleSave() {
+    if (!profile) return;
+    setSaving(true);
+    setSaveSuccess(false);
+    profile.logo_url = logoUrl.trim() || null;
+    // Simulate save / API sync
+    await new Promise((r) => setTimeout(r, 300));
+    setSaving(false);
+    setSaveSuccess(true);
+    setTimeout(() => setSaveSuccess(false), 3000);
+  }
 
   return (
     <div
@@ -83,6 +121,56 @@ export default function EstateAgentCardModal({ agentId, open, onClose, onFilterB
               >
                 {profile.website} ↗
               </a>
+            </div>
+          </div>
+
+          {/* Licences & Redress */}
+          <div className="border-t border-zinc-800/60 pt-3">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-2">
+              Organisation Logo / Branding
+            </h3>
+            <div className="flex flex-col gap-2">
+              {logoUrl ? (
+                <div className="flex items-center gap-3">
+                  <div className="h-12 w-12 rounded border border-zinc-800 bg-white p-1 overflow-hidden flex items-center justify-center">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={logoUrl} alt="Logo preview" className="max-h-full max-w-full object-contain" />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setLogoUrl('')}
+                    className="text-xs text-red-400 hover:underline"
+                  >
+                    Remove Logo
+                  </button>
+                </div>
+              ) : null}
+              <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center">
+                <label className="cursor-pointer rounded bg-zinc-800 px-3 py-1.5 text-xs font-semibold text-zinc-200 hover:bg-zinc-700">
+                  {uploading ? 'Uploading…' : 'Upload Logo File'}
+                  <input type="file" accept="image/*" onChange={handleFileUpload} disabled={uploading} className="hidden" />
+                </label>
+                <span className="text-xs text-zinc-500">or URL:</span>
+                <input
+                  type="url"
+                  placeholder="https://domain.com/logo.png"
+                  value={logoUrl}
+                  onChange={(e) => setLogoUrl(e.target.value)}
+                  className="flex-1 rounded border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-zinc-200"
+                />
+              </div>
+              {uploadError ? <p className="text-xs text-red-400">{uploadError}</p> : null}
+              <div className="flex items-center gap-2 mt-1">
+                <button
+                  type="button"
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="rounded bg-emerald-600 px-3 py-1 text-xs font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
+                >
+                  {saving ? 'Saving…' : 'Save Logo'}
+                </button>
+                {saveSuccess ? <span className="text-xs text-emerald-400">Saved ✓</span> : null}
+              </div>
             </div>
           </div>
 

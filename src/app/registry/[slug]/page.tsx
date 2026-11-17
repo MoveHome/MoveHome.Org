@@ -5,8 +5,8 @@
 import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { getAgent } from '@/lib/registry/store';
-import { safeHref, healthBadge, hostOf } from '@/lib/registry/ui';
+import { getAgent, getAffiliatedAgents } from '@/lib/registry/store';
+import { safeHref, healthBadge, hostOf, getMonogram } from '@/lib/registry/ui';
 import FlagButton from '@/components/registry/FlagButton';
 
 export const dynamic = 'force-dynamic';
@@ -35,11 +35,14 @@ export default async function AgentDetailPage({ params }: { params: Promise<{ sl
   const a = await getAgent(slug);
   if (!a) notFound();
 
+  const affiliatedAgents = a.is_org ? await getAffiliatedAgents(a) : [];
   const badge = healthBadge(a);
   const cardLink = safeHref(a.well_known_uri);
   const a2aLink = safeHref(a.a2a_url);
   const provLink = safeHref(a.provider_url);
   const docLink = safeHref(a.documentation_url);
+  const iconUrl = safeHref(a.icon_url);
+  const monogram = getMonogram(a.name || a.slug);
   const skills = Array.isArray(a.skills) ? a.skills : [];
 
   return (
@@ -47,9 +50,19 @@ export default async function AgentDetailPage({ params }: { params: Promise<{ sl
       <Link href="/registry" className="text-sm text-primary underline">← Registry</Link>
 
       <header className="mt-3 flex items-start justify-between gap-3">
-        <div>
-          <h1 className="text-3xl font-semibold">{a.name || a.slug}</h1>
-          {a.provider_org ? <p className="text-[var(--text-dim)] mt-1">{a.provider_org}</p> : null}
+        <div className="flex items-center gap-4">
+          <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-800 p-1 shadow-sm overflow-hidden">
+            {iconUrl ? (
+              /* eslint-disable-next-line @next/next/no-img-element */
+              <img src={iconUrl} alt="" className="h-full w-full object-contain" />
+            ) : (
+              <span className="text-base font-bold text-zinc-700 dark:text-zinc-200">{monogram}</span>
+            )}
+          </div>
+          <div>
+            <h1 className="text-3xl font-semibold">{a.name || a.slug}</h1>
+            {a.provider_org ? <p className="text-[var(--text-dim)] mt-1">{a.provider_org}</p> : null}
+          </div>
         </div>
         <div className="flex flex-col items-end gap-1 text-xs">
           <span className={`px-2 py-0.5 rounded ${badge.cls}`}>{badge.text}</span>
@@ -69,6 +82,44 @@ export default async function AgentDetailPage({ params }: { params: Promise<{ sl
         <Row label="Categories">{a.categories?.length ? a.categories.join(', ') : '—'}</Row>
         {docLink ? <Row label="Docs"><a className="text-primary underline" href={docLink}>documentation</a></Row> : null}
         {provLink ? <Row label="Provider"><a className="text-primary underline" href={provLink}>{hostOf(provLink)}</a></Row> : null}
+      </section>
+
+      <section className="mt-6">
+        <h2 className="text-xl font-semibold mb-2">Team / Authorised Agents</h2>
+        {affiliatedAgents.length === 0 ? (
+          <p className="text-sm text-[var(--text-dim)] italic">No individual negotiators listed for this organisation.</p>
+        ) : (
+          <div className="space-y-3">
+            {affiliatedAgents.map((teamAgent) => {
+              const teamIcon = safeHref(teamAgent.icon_url);
+              const teamMonogram = getMonogram(teamAgent.name || teamAgent.slug);
+              const orgName = a.name || a.provider_org || a.slug;
+              return (
+                <div key={teamAgent.id} className="rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-4 flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-800 p-1 shadow-sm overflow-hidden">
+                      {teamIcon ? (
+                        /* eslint-disable-next-line @next/next/no-img-element */
+                        <img src={teamIcon} alt="" className="h-full w-full object-contain" />
+                      ) : (
+                        <span className="text-xs font-bold text-zinc-700 dark:text-zinc-200">{teamMonogram}</span>
+                      )}
+                    </div>
+                    <div>
+                      <div className="font-semibold text-base text-[var(--text)]">{teamAgent.name || teamAgent.slug}</div>
+                      <div className="mt-0.5 inline-block text-xs text-amber-500 dark:text-amber-400 font-medium bg-amber-500/10 px-2 py-0.5 rounded border border-amber-500/20">
+                        Negotiator · enquiries route via {orgName}
+                      </div>
+                    </div>
+                  </div>
+                  <Link href={`/registry/${teamAgent.slug}`} className="text-xs text-primary underline shrink-0">
+                    View Card →
+                  </Link>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </section>
 
       <section className="mt-6">

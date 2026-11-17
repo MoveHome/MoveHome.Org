@@ -4,7 +4,7 @@
 
 import Link from 'next/link';
 import { listAgents, getStats } from '@/lib/registry/store';
-import { healthBadge, hostOf } from '@/lib/registry/ui';
+import { healthBadge, hostOf, safeHref, getMonogram } from '@/lib/registry/ui';
 import type { PublicRegistryAgent } from '@/lib/registry/types';
 
 export const dynamic = 'force-dynamic';
@@ -17,19 +17,34 @@ export const metadata = {
 const SERVICE_TYPES = ['long_term', 'short_term', 'sale'];
 const PAGE_SIZE = 24;
 
-function AgentTile({ a }: { a: PublicRegistryAgent }) {
+export function AgentTile({ a }: { a: PublicRegistryAgent }) {
   const badge = healthBadge(a);
   const skillCount = Array.isArray(a.skills) ? a.skills.length : 0;
+  const iconUrl = safeHref(a.icon_url);
+  const monogram = getMonogram(a.name || a.slug);
+
   return (
     <Link
       href={`/registry/${a.slug}`}
       className="block rounded-lg border border-[var(--border)] bg-[var(--bg-card)] p-4 hover:border-[var(--accent)] transition-colors"
     >
-      <div className="flex items-start justify-between gap-2">
-        <h2 className="font-semibold text-lg leading-tight text-[var(--text)]">{a.name || a.slug}</h2>
-        {a.signature_verified ? <span title="Signed agent card" className="text-[var(--accent)] text-sm">✓ signed</span> : null}
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-zinc-200 bg-white dark:border-zinc-700 dark:bg-zinc-800 p-1 shadow-sm overflow-hidden">
+            {iconUrl ? (
+              /* eslint-disable-next-line @next/next/no-img-element */
+              <img src={iconUrl} alt="" className="h-full w-full object-contain" />
+            ) : (
+              <span className="text-xs font-bold text-zinc-700 dark:text-zinc-200">{monogram}</span>
+            )}
+          </div>
+          <div className="min-w-0">
+            <h2 className="font-semibold text-lg leading-tight text-[var(--text)] truncate">{a.name || a.slug}</h2>
+            {a.provider_org ? <p className="text-sm text-[var(--text-dim)] mt-0.5 truncate">{a.provider_org}</p> : null}
+          </div>
+        </div>
+        {a.signature_verified ? <span title="Signed agent card" className="text-[var(--accent)] text-sm shrink-0">✓ signed</span> : null}
       </div>
-      {a.provider_org ? <p className="text-sm text-[var(--text-dim)] mt-0.5">{a.provider_org}</p> : null}
       {a.description ? <p className="text-sm mt-2 line-clamp-3 text-[var(--text-dim)]">{a.description}</p> : null}
       <div className="flex flex-wrap gap-1.5 mt-3">
         {(a.categories ?? []).slice(0, 4).map((c) => (
@@ -57,6 +72,7 @@ export default async function RegistryPage({
     serviceType: sp.service_type || undefined,
     category: sp.category || undefined,
     healthyOnly: sp.healthy === 'true',
+    orgOnly: true,
     limit: PAGE_SIZE,
     offset: (page - 1) * PAGE_SIZE
   });

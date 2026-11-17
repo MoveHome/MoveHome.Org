@@ -63,6 +63,7 @@ export interface PublicRegistryAgent {
   created_at: string;
   updated_at: string;
   last_synced_at: string | null;
+  is_org?: boolean;
 }
 
 export interface TaskConformance {
