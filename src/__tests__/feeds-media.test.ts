@@ -8,14 +8,21 @@ const listing = (over: Partial<Listing> = {}): Listing =>
 const kinds = (l: Listing) => mediaSlidesOf(l).map((s) => s.kind);
 const urls = (l: Listing) => mediaSlidesOf(l).map((s) => s.url);
 
-describe('Sales | Rentals feed classification', () => {
-  it('routes every rental service_type to rentals', () => {
-    for (const service_type of ['long_term', 'short_term'] as const) {
-      expect(feedOf(listing({ service_type }))).toBe('rentals');
+describe('Buy | Rent | Stay feed classification', () => {
+  it('routes every long-let service_type to rentals', () => {
+    for (const service_type of ['long_term', 'lettings', 'rent', 'rental'] as const) {
+      expect(feedOf(listing({ service_type: service_type as never }))).toBe('rentals');
     }
-    expect(feedOf(listing({ service_type: 'short_let' as never }))).toBe('rentals');
-    expect(feedOf(listing({ service_type: 'lettings' as never }))).toBe('rentals');
-    expect(feedOf(listing({ service_type: 'rent' as never }))).toBe('rentals');
+  });
+
+  it('routes every short-let service_type to stay, never rentals', () => {
+    for (const service_type of ['short_term', 'short_let', 'stay', 'holiday_let'] as const) {
+      expect(feedOf(listing({ service_type: service_type as never }))).toBe('stay');
+      // A short let is also transaction_type LETTINGS upstream.
+      expect(
+        feedOf(listing({ service_type: service_type as never, transaction_type: 'LETTINGS' } as never))
+      ).toBe('stay');
+    }
   });
 
   it('routes sale spellings to sales', () => {
@@ -37,12 +44,12 @@ describe('Sales | Rentals feed classification', () => {
     expect(feedOf(listing({ service_type: 'sale', transaction_type: 'SWAP' } as never))).toBe('sales');
   });
 
-  it('never classifies one listing into both feeds', () => {
+  it('populates all three feeds and leaves unknown spellings unfiled', () => {
     const types = ['long_term', 'short_term', 'sale', 'lettings', 'rent', 'buy', 'nonsense'];
-    const inFeed = (f: 'sales' | 'rentals') =>
-      types.filter((t) => feedOf(listing({ service_type: t as never })) === f);
-    expect(inFeed('rentals').filter((t) => inFeed('sales').includes(t))).toEqual([]);
-    expect(feedOf(listing({ service_type: 'nonsense' as never }))).toBeNull();
+    const filed = new Set(
+      types.map((t) => feedOf(listing({ service_type: t as never })) ?? 'none')
+    );
+    expect([...filed].sort()).toEqual(['none', 'rentals', 'sales', 'stay']);
   });
 });
 
