@@ -42,6 +42,14 @@ const SERVICE_FILTERS: [Service, string][] = [
   ['sale', 'Sales (Buy)']
 ];
 
+// Service filters belong to exactly one feed; a mismatch would empty the deck.
+const SERVICE_FEED: Record<Service, Feed | null> = {
+  all: null,
+  sale: 'sales',
+  long_term: 'rentals',
+  short_term: 'stay'
+};
+
 const BUDGETS_GBP: [number, string][] = [
   [0, 'Any'],
   [1500, '≤ £1,500'],
@@ -134,7 +142,7 @@ export default function PropertyDeck({
   // Each feed keeps its own place in the deck.
   const [cursors, setCursors] = useState<Record<Feed, number>>(() => {
     const i = Math.max(0, listings.findIndex((l) => l.raia_id === initialRaiaId));
-    const base: Record<Feed, number> = { sales: 0, rentals: 0 };
+    const base: Record<Feed, number> = { sales: 0, rentals: 0, stay: 0 };
     if (listings[i]) base[feedOf(listings[i]) ?? 'rentals'] = i;
     return base;
   });
@@ -158,14 +166,14 @@ export default function PropertyDeck({
     setContactChannel(storedChannel);
   }
     const q = new URLSearchParams(window.location.search).get('feed');
-    if (q === 'sales' || q === 'rentals') setFeed(q);
+    if (q === 'sales' || q === 'rentals' || q === 'stay') setFeed(q);
   }, []);
 
   // Feed is the outer axis: keep ?feed= in the URL and drop a service filter
   // that belongs to the other feed, which would otherwise empty the deck.
   function pickFeed(f: Feed) {
     setFeed(f);
-    setService((s) => (s === 'all' || (s === 'sale') === (f === 'sales') ? s : 'all'));
+    setService((s) => (s === 'all' || SERVICE_FEED[s] === f ? s : 'all'));
     const url = new URL(window.location.href);
     url.searchParams.set('feed', f);
     window.history.replaceState(null, '', url);
@@ -261,7 +269,7 @@ export default function PropertyDeck({
       if (tab === 'saved') return saved.includes(l.raia_id);
       if (tab === 'viewings') return false;
 
-      // Sales and rentals never share a card: the feed is checked before anything else.
+      // Buy, Rent and Stay never share a card: the feed is checked before anything else.
       if (feedOf(l) !== feed) return false;
 
       const c = countryOf(l);
@@ -797,8 +805,9 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 function FeedTabs({ feed, onChange }: { feed: Feed; onChange: (f: Feed) => void }) {
   const feeds: [Feed, string][] = [
-    ['sales', 'Sales'],
-    ['rentals', 'Rentals']
+    ['sales', 'Buy'],
+    ['rentals', 'Rent'],
+    ['stay', 'Stay']
   ];
   return (
     <div

@@ -345,18 +345,23 @@ export function youtubeIdOf(url: string | null | undefined): string | null {
 // A YouTube link in <video src> fails silently, so it gets a player instead.
 export const isYouTubeUrl = (url: string | null | undefined): boolean => youtubeIdOf(url) !== null;
 
-// ── Sales | Rentals feeds ──────────────────────────────────────────────────
+// ── Buy | Rent | Stay feeds ──────────────────────────────────────────────────
 
-export type Feed = 'sales' | 'rentals';
+export type Feed = 'sales' | 'rentals' | 'stay';
 
 const SALES_TYPES = ['sale', 'sales', 'buy'];
+const RENTAL_TYPES = ['long_term', 'lettings', 'rent', 'rental'];
 // short_term is this codebase's name for a short let.
-const RENTAL_TYPES = ['long_term', 'short_term', 'short_let', 'lettings', 'rent'];
+const STAY_TYPES = ['short_term', 'short_let', 'stay', 'holiday_let'];
 
 // Portal rows carry transaction_type (SALES/LETTINGS), feed rows service_type;
 // they disagree on spelling, so both are normalised before matching. A listing
 // that matches neither belongs to no feed rather than to both.
 export function feedOf(l: Listing): Feed | null {
+  // A short let is also transaction_type LETTINGS, so service_type is checked
+  // first or every Stay listing would be swept into Rent.
+  const st = (l.service_type ?? '').toLowerCase();
+  if (STAY_TYPES.includes(st)) return 'stay';
   const tt = (l as Listing & { transaction_type?: string | null }).transaction_type;
   const classify = (v?: string | null): Feed | null => {
     const s = (v ?? '').toLowerCase();
