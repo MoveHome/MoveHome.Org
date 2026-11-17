@@ -83,15 +83,16 @@ const MENU_SECTIONS = [
   {
     title: 'AI Agent',
     links: [
-      ['/connect', 'Connect Your AI Agent']
+      ['https://movehome.org/connect', 'Connect Your AI Agent']
     ]
   },
   {
     title: 'MoveHome',
     links: [
-      ['/about', 'About'],
-      ['/charter', 'Charter'],
-      ['/terms', 'Terms']
+      ['https://movehome.org/', 'About'],
+      ['https://movehome.org/charter', 'Charter'],
+      ['https://movehome.org/terms', 'Terms'],
+      ['https://movehome.org/privacy', 'Privacy']
     ]
   }
 ] as const;
@@ -369,12 +370,11 @@ export default function PropertyDeck({
     <div className="flex h-[100dvh] w-full flex-col bg-[var(--bg)] text-[var(--text)]">
       {/* Top bar */}
       <header className="relative z-30 shrink-0 border-b border-[var(--border)] bg-[var(--bg-elev)] px-3 pb-2 pt-3">
-        {/* Desktop nav (≥768px): Agents · Charter · Properties + feed + Filter */}
+        {/* Desktop nav (≥768px): Agents · Charter + feed + Filter */}
         <div className="mx-auto hidden md:flex w-full max-w-[680px] items-center justify-between gap-3">
           <div className="flex items-center gap-4 text-sm font-semibold text-[var(--text-dim)]">
-            <a href="/registry" className="hover:text-emerald-500 transition-colors">Agents</a>
-            <a href="/charter" className="hover:text-emerald-500 transition-colors">Charter</a>
-            <a href="/app" className="hover:text-emerald-500 transition-colors">Properties</a>
+            <a href="https://movehome.org/registry" className="hover:text-emerald-500 transition-colors">Agents</a>
+            <a href="https://movehome.org/charter" className="hover:text-emerald-500 transition-colors">Charter</a>
           </div>
           <FeedTabs feed={feed} onChange={pickFeed} />
           <div className="flex items-center gap-2">

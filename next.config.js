@@ -7,6 +7,78 @@ const nextConfig = {
         source: '/.well-known/raia-agent.json',
         destination: '/.well-known/raia.json',
         permanent: true
+      },
+      {
+        source: '/about',
+        has: [{ type: 'host', value: 'app.movehome.org' }],
+        destination: 'https://movehome.org/',
+        permanent: true
+      },
+      {
+        source: '/about',
+        has: [{ type: 'host', value: 'application.movehome.org' }],
+        destination: 'https://movehome.org/',
+        permanent: true
+      },
+      {
+        source: '/charter',
+        has: [{ type: 'host', value: 'app.movehome.org' }],
+        destination: 'https://movehome.org/charter',
+        permanent: true
+      },
+      {
+        source: '/charter',
+        has: [{ type: 'host', value: 'application.movehome.org' }],
+        destination: 'https://movehome.org/charter',
+        permanent: true
+      },
+      {
+        source: '/terms',
+        has: [{ type: 'host', value: 'app.movehome.org' }],
+        destination: 'https://movehome.org/terms',
+        permanent: true
+      },
+      {
+        source: '/terms',
+        has: [{ type: 'host', value: 'application.movehome.org' }],
+        destination: 'https://movehome.org/terms',
+        permanent: true
+      },
+      {
+        source: '/privacy',
+        has: [{ type: 'host', value: 'app.movehome.org' }],
+        destination: 'https://movehome.org/privacy',
+        permanent: true
+      },
+      {
+        source: '/privacy',
+        has: [{ type: 'host', value: 'application.movehome.org' }],
+        destination: 'https://movehome.org/privacy',
+        permanent: true
+      },
+      {
+        source: '/registry',
+        has: [{ type: 'host', value: 'app.movehome.org' }],
+        destination: 'https://movehome.org/registry',
+        permanent: true
+      },
+      {
+        source: '/registry',
+        has: [{ type: 'host', value: 'application.movehome.org' }],
+        destination: 'https://movehome.org/registry',
+        permanent: true
+      },
+      {
+        source: '/connect',
+        has: [{ type: 'host', value: 'app.movehome.org' }],
+        destination: 'https://movehome.org/connect',
+        permanent: true
+      },
+      {
+        source: '/connect',
+        has: [{ type: 'host', value: 'application.movehome.org' }],
+        destination: 'https://movehome.org/connect',
+        permanent: true
       }
     ];
   },
