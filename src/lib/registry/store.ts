@@ -68,13 +68,22 @@ export async function createAgent(
     service_types: card.service_types,
     categories: card.categories,
     status: 'listed',
+    // Staged until the agency claims it (migration 0019 gates the public view on
+    // publication_status='published'). Explicit rather than relying on the DB default,
+    // and never 'published' from a self-submit.
+    publication_status: 'staged',
     discovery_method: meta.discoveryMethod ?? 'self_submit',
     submitted_by_hash: meta.submittedByHash,
     last_synced_at: new Date().toISOString()
   };
   const { data, error } = await table('tbl_a2a_registry').insert(row).select('id').single();
   if (error) throw new Error(`registry insert failed: ${error.message}`);
-  const created = await getAgent((data as { id: string }).id);
+  // Read the base table, not the public view: a freshly inserted row is 'staged' and
+  // therefore deliberately absent from vw_a2a_registry_public.
+  const { data: inserted } = await table('tbl_a2a_registry').select('*').eq('id', (data as { id: string }).id).maybeSingle();
+  const created = inserted
+    ? { ...(inserted as PublicRegistryAgent), is_org: isOrganisationAgent(inserted as PublicRegistryAgent) }
+    : null;
   if (!created) throw new Error('registry insert succeeded but row not readable');
   return created;
 }
@@ -222,6 +231,89 @@ export async function flagAgent(id: string): Promise<boolean> {
     .update({ flag_count: next, ...(next >= FLAG_AUTO_HIDE_THRESHOLD ? { hidden: true, status: 'pending' } : {}) })
     .eq('id', id);
   return true;
+}
+
+// ── claim lifecycle (migration 0019) ────────────────────────────────────────
+// A card is public only once its agency claims it: vw_a2a_registry_public serves
+// publication_status='published', new rows are 'staged'. Base-table reads only.
+
+export const CLAIM_TOKEN_TTL_MS = 72 * 60 * 60 * 1000;
+const CLAIM_ATTEMPT_WINDOW_MS = 24 * 60 * 60 * 1000;
+export const CLAIM_MAX_ATTEMPTS = 5;
+
+export interface ClaimRow {
+  id: string;
+  slug: string;
+  name: string | null;
+  publication_status: string;
+  claimed_at: string | null;
+  claim_token: string | null;
+  claim_token_expires_at: string | null;
+  claim_attempts: number;
+  claim_token_sent_at: string | null;
+}
+
+const CLAIM_COLUMNS =
+  'id, slug, name, publication_status, claimed_at, claim_token, claim_token_expires_at, claim_attempts, claim_token_sent_at';
+
+export async function getClaimRow(slug: string): Promise<ClaimRow | null> {
+  const { data } = await table('tbl_a2a_registry').select(CLAIM_COLUMNS).eq('slug', slug).maybeSingle();
+  return (data as ClaimRow | null) ?? null;
+}
+
+// Attempts that count toward the 24h cap. The window starts at the last token send:
+// shortcut: no per-attempt history table, so a burst older than 24h resets the
+// counter — upgrade to an attempt log if abuse needs auditing.
+export function claimAttemptsInWindow(row: ClaimRow): number {
+  const sentAt = row.claim_token_sent_at ? Date.parse(row.claim_token_sent_at) : NaN;
+  if (!sentAt || Date.now() - sentAt > CLAIM_ATTEMPT_WINDOW_MS) return 0;
+  return row.claim_attempts;
+}
+
+/** Store the one-time token, the offered website, and bump the attempt counter. */
+export async function issueClaimToken(
+  id: string,
+  token: string,
+  opts: { websiteUrl: string | null; attempts: number }
+): Promise<void> {
+  const now = Date.now();
+  const { error } = await table('tbl_a2a_registry')
+    .update({
+      claim_token: token,
+      claim_token_sent_at: new Date(now).toISOString(),
+      claim_token_expires_at: new Date(now + CLAIM_TOKEN_TTL_MS).toISOString(),
+      claim_attempts: opts.attempts + 1,
+      // Held off-public until publish; the row is 'staged' meanwhile.
+      verified_website_url: opts.websiteUrl
+    })
+    .eq('id', id);
+  if (error) throw new Error(`claim token issue failed: ${error.message}`);
+}
+
+/** Undo a token write when the email could not be sent (card must stay claimable). */
+export async function clearClaimToken(id: string): Promise<void> {
+  await table('tbl_a2a_registry')
+    .update({ claim_token: null, claim_token_sent_at: null, claim_token_expires_at: null })
+    .eq('id', id);
+}
+
+/** Verified claim → the card goes live and the token is burned. */
+export async function publishClaimedCard(id: string, contactEmail: string): Promise<void> {
+  const now = new Date().toISOString();
+  const { error } = await table('tbl_a2a_registry')
+    .update({
+      publication_status: 'published',
+      status: 'listed',
+      hidden: false,
+      claimed_at: now,
+      claimed_by_email: contactEmail,
+      claim_token: null,
+      claim_token_sent_at: null,
+      claim_token_expires_at: null,
+      last_synced_at: now
+    })
+    .eq('id', id);
+  if (error) throw new Error(`claim publish failed: ${error.message}`);
 }
 
 // ── health worker support (Lane C) ──────────────────────────────────────────

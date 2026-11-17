@@ -1,5 +1,6 @@
 // POST /api/registry/v1/agents/register  { "wellKnownURI": "https://…/.well-known/agent-card.json" }
-// Fetches + validates the card, confirms it's a real-estate agent, and auto-lists it.
+// Fetches + validates the card, confirms it's a real-estate agent, and saves it as a
+// private ('staged') card — it goes public only when the agency claims it (migration 0019).
 // Per-IP rate limited; idempotent-rejects duplicates with 409.
 
 import { NextResponse } from 'next/server';

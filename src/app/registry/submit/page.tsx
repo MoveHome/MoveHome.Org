@@ -62,7 +62,8 @@ export default function SubmitPage() {
       <h1 className="text-3xl font-semibold mt-3">Register your A2A agent</h1>
       <p className="text-[var(--text-dim)] mt-2">
         Paste the URL of your agent&apos;s A2A Agent Card (its <code>/.well-known/agent-card.json</code>). We fetch
-        and validate it, confirm it&apos;s a real-estate agent, and list it immediately. Read-only — no account needed.
+        and validate it, confirm it&apos;s a real-estate agent, and save it as a private card. Read-only — no account
+        needed. The card only goes public once its agency claims it.
       </p>
 
       <form onSubmit={submit} className="mt-6 flex flex-col gap-3">
@@ -103,10 +104,11 @@ export default function SubmitPage() {
 
       {ok ? (
         <div className="mt-6 rounded border border-[var(--accent)] bg-[var(--tint-lightest)] p-4">
-          <p className="font-medium text-[var(--accent-hover)]">Listed ✓</p>
+          <p className="font-medium text-[var(--accent-hover)]">Card saved ✓</p>
           <p className="text-sm mt-1">
-            <Link href={`/registry/${ok.agent.slug}`} className="text-primary underline">
-              View {ok.agent.name || ok.agent.slug} →
+            {ok.agent.name || ok.agent.slug} is private until its agency claims it.{' '}
+            <Link href={`/registry/claim?slug=${encodeURIComponent(ok.agent.slug)}`} className="text-primary underline">
+              Claim this card →
             </Link>
           </p>
         </div>
