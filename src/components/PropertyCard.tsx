@@ -1,12 +1,13 @@
 'use client';
 
 // Mobile-first property card: video-first media stage with tap/swipe slides,
-// HUD rendered in React, expanded description drawer, viewing slot sheet,
-// clickable Estate Agent pill, and Giraffe 360 virtual tour modal.
+// card deck physics & gesture model, HUD, expanded description drawer,
+// viewing slot sheet, clickable Estate Agent pill, and Giraffe 360 virtual tour modal.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Listing } from '@/lib/types';
 import { getEstateAgentProfile } from '@/lib/agent-directory';
+import { classifyGesture } from '@/lib/gesture';
 import DescriptionToggleButton from './DescriptionToggleButton';
 import EstateAgentCardModal from './EstateAgentCardModal';
 import {
@@ -31,12 +32,16 @@ interface Props {
   onToggleSave: (id: string) => void;
   onPass: () => void;
   onRewind: () => void;
+  onNextProperty: () => void;
+  onPrevProperty: () => void;
   onSelect: (id: string) => void;
   drawer: boolean;
   onDrawerChange: (open: boolean) => void;
   keysEnabled?: boolean;
   voiceGender?: 'female' | 'male';
   onFilterByAgent?: (agentId: string) => void;
+  exitAnimation?: 'pass' | 'save' | null;
+  onExitComplete?: () => void;
 }
 
 type Slide = { kind: 'video' | 'photo'; url: string };
@@ -77,12 +82,16 @@ export default function PropertyCard({
   onToggleSave,
   onPass,
   onRewind,
+  onNextProperty,
+  onPrevProperty,
   onSelect,
   drawer,
   onDrawerChange,
   keysEnabled = true,
   voiceGender = 'female',
-  onFilterByAgent
+  onFilterByAgent,
+  exitAnimation = null,
+  onExitComplete
 }: Props) {
   const slides = useMemo(() => slidesOf(listing), [listing]);
   const [slide, setSlide] = useState(0);
@@ -92,15 +101,36 @@ export default function PropertyCard({
   const [giraffeModalOpen, setGiraffeModalOpen] = useState(false);
   const [youtubeOpen, setYoutubeOpen] = useState(false);
 
+  // Live pointer drag state
+  const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [animatingExit, setAnimatingExit] = useState<'pass' | 'save' | 'up' | 'down' | null>(null);
+
   const videoRef = useRef<HTMLVideoElement>(null);
   const narrationRef = useRef<{ audio: HTMLAudioElement; abort: AbortController; url: string | null } | null>(
     null
   );
-  const swiped = useRef(false);
-  const drag = useRef<{ x: number; y: number } | null>(null);
+  const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
 
   const agentProfile = getEstateAgentProfile(listing.agent_id);
   const youtubeId = youtubeIdOf(listing.video_url);
+
+  // Handle external button toss trigger (Pass / Save buttons)
+  useEffect(() => {
+    if (exitAnimation) {
+      setAnimatingExit(exitAnimation);
+      const timer = setTimeout(() => {
+        if (exitAnimation === 'save') {
+          if (!saved) onToggleSave(listing.raia_id);
+        } else if (exitAnimation === 'pass') {
+          onPass();
+        }
+        setAnimatingExit(null);
+        onExitComplete?.();
+      }, 240);
+      return () => clearTimeout(timer);
+    }
+  }, [exitAnimation, saved, listing.raia_id, onToggleSave, onPass, onExitComplete]);
 
   useEffect(() => {
     const v = videoRef.current;
@@ -130,8 +160,7 @@ export default function PropertyCard({
     return () => window.removeEventListener('keydown', onKey);
   }, [drawer, keysEnabled, slides.length, agentModalOpen, giraffeModalOpen, youtubeOpen]);
 
-  // Nothing keeps talking after the card leaves: abort the fetch, kill the
-  // audio and drop the browser voice.
+  // Nothing keeps talking after the card leaves: abort the fetch, kill the audio and drop browser voice.
   const stopNarration = useCallback(() => {
     const cur = narrationRef.current;
     narrationRef.current = null;
@@ -155,7 +184,6 @@ export default function PropertyCard({
 
   const locale = ttsLocaleOf(listing);
 
-  // Local browser voice: the fallback when the TTS endpoint has no key/audio.
   function speakLocal() {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
     window.speechSynthesis.cancel();
@@ -174,7 +202,6 @@ export default function PropertyCard({
     setNarration('playing');
   }
 
-  // One narration-only toggle: 1st tap plays, 2nd tap stops.
   function toggleNarration() {
     if (narration !== 'idle') {
       stopNarration();
@@ -184,7 +211,6 @@ export default function PropertyCard({
     const abort = new AbortController();
     narrationRef.current = { audio, abort, url: null };
     setNarration('loading');
-    // Must happen synchronously inside the click or iOS blocks the later play().
     audio.src = SILENT_WAV;
     audio.play().catch(() => {});
 
@@ -214,6 +240,124 @@ export default function PropertyCard({
     })();
   }
 
+  // Pointer drag event handlers (active only when drawer/sheets are closed)
+  const canDrag = !drawer && !sheet && !agentModalOpen && !giraffeModalOpen && !youtubeOpen;
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    if (!canDrag) return;
+    if (e.pointerType === 'touch') {
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {}
+    }
+    pointerStartRef.current = { x: e.clientX, y: e.clientY };
+    setIsDragging(true);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (!isDragging || !pointerStartRef.current) return;
+    const dx = e.clientX - pointerStartRef.current.x;
+    const dy = e.clientY - pointerStartRef.current.y;
+    setDragOffset({ x: dx, y: dy });
+  };
+
+  const handlePointerUpOrCancel = (e: React.PointerEvent) => {
+    if (!isDragging || !pointerStartRef.current) return;
+    if (e.pointerType === 'touch') {
+      try {
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+          e.currentTarget.releasePointerCapture(e.pointerId);
+        }
+      } catch {}
+    }
+
+    const dx = e.clientX - pointerStartRef.current.x;
+    const dy = e.clientY - pointerStartRef.current.y;
+    pointerStartRef.current = null;
+    setIsDragging(false);
+
+    const intent = classifyGesture({ dx, dy, tapMax: 15, swipeMin: 65 });
+
+    if (intent === 'tap') {
+      setDragOffset({ x: 0, y: 0 });
+      // Edge tap: left half -> prev photo, right half -> next photo
+      const rect = e.currentTarget.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      if (clickX < rect.width / 2) {
+        prev();
+      } else {
+        next();
+      }
+      return;
+    }
+
+    if (intent === 'pass') {
+      setAnimatingExit('pass');
+      stopNarration();
+      setTimeout(() => {
+        onPass();
+        setAnimatingExit(null);
+        setDragOffset({ x: 0, y: 0 });
+      }, 240);
+    } else if (intent === 'save') {
+      setAnimatingExit('save');
+      stopNarration();
+      setTimeout(() => {
+        if (!saved) onToggleSave(listing.raia_id);
+        onNextProperty();
+        setAnimatingExit(null);
+        setDragOffset({ x: 0, y: 0 });
+      }, 240);
+    } else if (intent === 'next_property') {
+      setAnimatingExit('up');
+      stopNarration();
+      setTimeout(() => {
+        onNextProperty();
+        setAnimatingExit(null);
+        setDragOffset({ x: 0, y: 0 });
+      }, 220);
+    } else if (intent === 'prev_property') {
+      setAnimatingExit('down');
+      stopNarration();
+      setTimeout(() => {
+        onPrevProperty();
+        setAnimatingExit(null);
+        setDragOffset({ x: 0, y: 0 });
+      }, 220);
+    } else {
+      // Spring back if threshold not reached
+      setDragOffset({ x: 0, y: 0 });
+    }
+  };
+
+  // Card transform styling based on live drag & exit animation
+  let cardTransform = '';
+  let cardTransition = isDragging ? 'none' : 'transform 240ms cubic-bezier(0.22, 1, 0.36, 1)';
+
+  if (animatingExit === 'pass') {
+    cardTransform = 'translateX(-460px) rotate(-15deg)';
+  } else if (animatingExit === 'save') {
+    cardTransform = 'translateX(460px) rotate(15deg)';
+  } else if (animatingExit === 'up') {
+    cardTransform = 'translateY(-600px) scale(0.95)';
+    cardTransition = 'transform 220ms ease-in';
+  } else if (animatingExit === 'down') {
+    cardTransform = 'translateY(600px) scale(0.95)';
+    cardTransition = 'transform 220ms ease-in';
+  } else if (isDragging) {
+    const absX = Math.abs(dragOffset.x);
+    const absY = Math.abs(dragOffset.y);
+    if (absX >= absY) {
+      cardTransform = `translateX(${dragOffset.x}px) rotate(${dragOffset.x * 0.04}deg)`;
+    } else {
+      cardTransform = `translateY(${dragOffset.y * 0.85}px) scale(0.98)`;
+    }
+  }
+
+  // Stamp badge calculations
+  const showPassBadge = (isDragging && dragOffset.x < -35 && Math.abs(dragOffset.x) >= Math.abs(dragOffset.y)) || animatingExit === 'pass';
+  const showSaveBadge = (isDragging && dragOffset.x > 35 && Math.abs(dragOffset.x) >= Math.abs(dragOffset.y)) || animatingExit === 'save';
+
   const vacant = isVacant(listing);
   const isVideoSlide = slides[slide]?.kind === 'video';
 
@@ -227,47 +371,31 @@ export default function PropertyCard({
   )}`;
 
   return (
-    <article className="relative h-full w-full select-none overflow-hidden rounded-[26px] bg-[#09090b] text-white shadow-2xl">
-      {/* ── Media stage ───────────────────────────────────────────────── */}
+    <article
+      style={{ transform: cardTransform, transition: cardTransition }}
+      className={`relative h-full w-full select-none overflow-hidden rounded-[26px] bg-[#09090b] text-white shadow-2xl ${
+        showSaveBadge ? 'ring-4 ring-emerald-500/80 shadow-emerald-500/20' : ''
+      } ${showPassBadge ? 'ring-4 ring-rose-500/80 shadow-rose-500/20' : ''}`}
+    >
+      {/* ── SAVE / PASS Overlay Stamp ────────────────────────────────── */}
+      {showSaveBadge && (
+        <div className="pointer-events-none absolute left-6 top-16 z-30 rotate-[-12deg] rounded-xl border-4 border-emerald-500 bg-emerald-950/80 px-4 py-1.5 text-2xl font-black tracking-wider text-emerald-400 backdrop-blur">
+          ♥ SAVE
+        </div>
+      )}
+      {showPassBadge && (
+        <div className="pointer-events-none absolute right-6 top-16 z-30 rotate-[12deg] rounded-xl border-4 border-rose-500 bg-rose-950/80 px-4 py-1.5 text-2xl font-black tracking-wider text-rose-400 backdrop-blur">
+          ✕ PASS
+        </div>
+      )}
+
+      {/* ── Media stage with Pointer Drag & Tap ────────────────────── */}
       <div
         className="absolute inset-0 touch-none"
-        onPointerDown={(e) => {
-          if (e.pointerType === 'touch') {
-            try {
-              e.currentTarget.setPointerCapture(e.pointerId);
-            } catch {}
-          }
-          drag.current = { x: e.clientX, y: e.clientY };
-        }}
-        onPointerCancel={() => {
-          drag.current = null;
-        }}
-        onPointerUp={(e) => {
-          if (e.pointerType === 'touch') {
-            try {
-              if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-                e.currentTarget.releasePointerCapture(e.pointerId);
-              }
-            } catch {}
-          }
-          const s = drag.current;
-          drag.current = null;
-          if (!s) return;
-          const dx = e.clientX - s.x;
-          const dy = e.clientY - s.y;
-          if (Math.abs(dy) > 60 && Math.abs(dy) > Math.abs(dx)) {
-            swiped.current = true;
-            stopNarration();
-            if (dy < 0) onPass();
-            else onRewind();
-            return;
-          }
-          if (Math.abs(dx) < 60) return;
-          swiped.current = true;
-          stopNarration();
-          if (dx < 0) next();
-          else prev();
-        }}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUpOrCancel}
+        onPointerCancel={handlePointerUpOrCancel}
       >
         {slides.length === 0 && (
           <div className="flex h-full items-center justify-center text-sm text-white/60">No media</div>
@@ -296,19 +424,6 @@ export default function PropertyCard({
             />
           )
         )}
-
-        <button
-          type="button"
-          aria-label="Previous photo"
-          className="absolute inset-y-0 left-0 z-10 w-1/2"
-          onClick={() => (swiped.current ? (swiped.current = false) : prev())}
-        />
-        <button
-          type="button"
-          aria-label="Next photo"
-          className="absolute inset-y-0 right-0 z-10 w-1/2"
-          onClick={() => (swiped.current ? (swiped.current = false) : next())}
-        />
       </div>
 
       {/* Story pagination bars */}
@@ -341,7 +456,7 @@ export default function PropertyCard({
         </div>
       )}
 
-      {/* YouTube tour opens in its own player — never as a silent <video src> */}
+      {/* YouTube tour opens in its own player */}
       {youtubeId && (
         <button
           type="button"
@@ -413,7 +528,7 @@ export default function PropertyCard({
           <Action label="Rewind" onClick={onRewind} size={44}>
             <RewindIcon />
           </Action>
-          <Action label="Pass" onClick={onPass} size={56}>
+          <Action label="Pass" onClick={() => onPass()} size={56}>
             <PassIcon />
           </Action>
           <Action
@@ -442,7 +557,7 @@ export default function PropertyCard({
         </div>
       </div>
 
-      {/* ↑ info button → drawer (the only way in) */}
+      {/* ↑ info button → drawer */}
       <div className="absolute right-3 top-1/2 z-20 -translate-y-1/2">
         <DescriptionToggleButton open={false} onClick={() => onDrawerChange(true)} />
       </div>
@@ -605,7 +720,6 @@ export default function PropertyCard({
             className="relative flex flex-col h-full w-full rounded-2xl overflow-hidden border border-zinc-800 bg-zinc-950"
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Header */}
             <div className="flex items-center justify-between border-b border-zinc-800 bg-zinc-900/90 px-4 py-3">
               <div className="flex items-center gap-2">
                 <span className="text-sm font-bold text-cyan-300">🌐 360° Giraffe Virtual Tour</span>
@@ -630,8 +744,6 @@ export default function PropertyCard({
                 </button>
               </div>
             </div>
-
-            {/* iframe container */}
             <div className="flex-1 w-full h-full bg-black">
               <iframe
                 src={listing.tour_360_url}
@@ -644,7 +756,7 @@ export default function PropertyCard({
         </div>
       )}
 
-      {/* YouTube Tour Modal — YouTube keeps its own volume/playback controls */}
+      {/* YouTube Tour Modal */}
       {youtubeOpen && youtubeId && (
         <div
           className="fixed inset-0 z-50 flex flex-col bg-black p-2 md:p-4"
