@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Listing } from '../lib/types';
 import {
   buildPropertyDescriptionWithCta,
+  availabilityOf,
   catalogCities,
   cityOf,
   countryOf,
@@ -58,12 +59,27 @@ describe('property-card helpers', () => {
     expect(titleOf(listing({ bedrooms: 1, headline: '1 Bed Flat' }))).toBe('1 Bed Flat');
   });
 
-  it('reports vacancy and renders it without emoji', () => {
+  it('reports vacancy and renders discrete availability states', () => {
+    const now = new Date('2026-01-01T00:00:00Z');
     expect(isVacant(listing({ listing_status: 'available' }))).toBe(true);
-    expect(statusLabel(listing({ listing_status: 'available' }))).toBe('Vacant · Available Now');
-    const future = new Date(Date.now() + 7 * 86_400_000).toISOString();
-    expect(isVacant(listing({ listing_status: 'available', available_from: future }))).toBe(false);
-    expect(statusLabel(listing({ listing_status: 'let_agreed' }))).toBe('Let Agreed · Register Interest');
+    expect(statusLabel(listing({ listing_status: 'available' }), now)).toBe('Available Now');
+    expect(availabilityOf(listing({ listing_status: 'available' }), now)).toBe('now');
+    expect(
+      availabilityOf(listing({ listing_status: 'available', available_from: '2026-10-14' }), now)
+    ).toBe('soon');
+    expect(statusLabel(listing({ listing_status: 'available', available_from: '2026-10-14', un_locode: 'GBLON' }), now)).toBe(
+      'Available 14/10/26'
+    );
+    expect(statusLabel(listing({ listing_status: 'let_agreed' }), now)).toBe('Unavailable');
+    expect(availabilityOf(listing({ listing_status: 'withdrawn' }), now)).toBe('unavailable');
+  });
+
+  it('uses the country date convention for future availability', () => {
+    const now = new Date('2026-01-01T00:00:00Z');
+    const th = listing({ listing_status: 'available', available_from: '2026-10-14', jurisdiction: 'TH' });
+    const my = listing({ listing_status: 'available', available_from: '2026-10-14', jurisdiction: 'MY' });
+    expect(statusLabel(th, now)).toBe('Available 14/10/2026');
+    expect(statusLabel(my, now)).toBe('Available 14/10/2026');
   });
 
   it('formats spec groups correctly and normalizes 0 beds to Studio Flat', () => {
@@ -199,7 +215,7 @@ describe('buildPropertyDescriptionWithCta', () => {
       'Acme Lettings'
     );
     expect(text).toContain('Rent this 2-bed property in Camden.');
-    expect(text).toContain('vacant · available now');
+    expect(text).toContain('available now');
     expect(text).toContain('£500 pcm');
     expect(text).toContain('Contact Acme Lettings via Personal AI Agent below.');
   });
