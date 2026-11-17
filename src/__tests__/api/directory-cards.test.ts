@@ -61,4 +61,16 @@ describe('directory cards', () => {
     expect(entity.kind).toBe('property');
     expect(entity.listing_agent.agent_id).toBe('org-gb-rlf');
   });
+
+  it('fallback to DIRECTORY_ENTITIES in getListingByRef works for registered property refs', async () => {
+    const { getListingByRef } = await import('@/lib/queries');
+    const listing = await getListingByRef('org-gb-rlf', '000214');
+    expect(listing).not.toBeNull();
+    expect(listing?.raia_id).toBe('prop-gb-rlf-000214');
+    expect(listing?.headline).toBe('14C Pembroke');
+
+    const listingByFullRef = await getListingByRef('org-gb-rlf', 'prop-gb-rlf-000214');
+    expect(listingByFullRef).not.toBeNull();
+    expect(listingByFullRef?.raia_id).toBe('prop-gb-rlf-000214');
+  });
 });
