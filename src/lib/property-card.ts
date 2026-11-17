@@ -22,7 +22,11 @@ export function titleOf(l: Listing): string {
     l.development_name ??
     [l.suburb, l.postcode_district].filter(Boolean).join(' ');
   // Upstream headlines ship "2-bedflat"; split the run-together word.
-  return (t || l.raia_id).replace(/(\d+-bed)flat/gi, '$1 flat');
+  const raw = (t || l.raia_id).replace(/(\d+-bed)flat/gi, '$1 flat');
+  // A 0-bed room is marketed as a studio, never "0 Bed Flat".
+  return l.bedrooms === 0
+    ? raw.replace(/\b0[\s-]?bed(?:room)?s?\b(?:\s*(?:flat|apartment))?/gi, 'Studio Flat')
+    : raw;
 }
 
 // Two spec groups, nulls dropped so nothing ever renders "UNKNOWN"/"NA".
