@@ -228,7 +228,6 @@ export default function PropertyDeck({
   const safeIndex = Math.min(index, Math.max(0, stream.length - 1));
   const current = stream[safeIndex];
   const nextListing = stream[safeIndex + 1];
-  const [cardExitAnim, setCardExitAnim] = useState<'pass' | 'save' | null>(null);
 
   // A filter change invalidates the position in the stream.
   useEffect(() => {
@@ -359,6 +358,8 @@ export default function PropertyDeck({
           {nextListing && (
             <div
               className="absolute inset-0 origin-bottom transform transition-all duration-300 ease-out"
+              inert
+              aria-hidden="true"
               style={{
                 transform: 'scale(0.95) translateY(12px)',
                 opacity: 0.6,
@@ -369,6 +370,7 @@ export default function PropertyDeck({
                 listing={nextListing}
                 saved={saved.includes(nextListing.raia_id)}
                 onToggleSave={() => {}}
+                onSave={() => {}}
                 onPass={() => {}}
                 onRewind={() => {}}
                 onNextProperty={() => {}}
@@ -390,10 +392,8 @@ export default function PropertyDeck({
               )}
               saved={saved.includes(current.raia_id)}
               onToggleSave={toggleSave}
-              onPass={() => {
-                if (!cardExitAnim) setCardExitAnim('pass');
-                else go(1);
-              }}
+              onSave={() => go(1)}
+              onPass={() => go(1)}
               onRewind={() => go(-1)}
               onNextProperty={() => go(1)}
               onPrevProperty={() => go(-1)}
@@ -404,11 +404,6 @@ export default function PropertyDeck({
               onSelect={(id) => {
                 const i = stream.findIndex((l) => l.raia_id === id);
                 if (i >= 0) go(i - safeIndex);
-              }}
-              exitAnimation={cardExitAnim}
-              onExitComplete={() => {
-                setCardExitAnim(null);
-                go(1);
               }}
             />
           ) : (

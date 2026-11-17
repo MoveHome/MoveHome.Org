@@ -30,6 +30,7 @@ interface Props {
   similar?: Listing[];
   saved: boolean;
   onToggleSave: (id: string) => void;
+  onSave: () => void;
   onPass: () => void;
   onRewind: () => void;
   onNextProperty: () => void;
@@ -40,8 +41,6 @@ interface Props {
   keysEnabled?: boolean;
   voiceGender?: 'female' | 'male';
   onFilterByAgent?: (agentId: string) => void;
-  exitAnimation?: 'pass' | 'save' | null;
-  onExitComplete?: () => void;
 }
 
 type Slide = { kind: 'video' | 'photo'; url: string };
@@ -80,6 +79,7 @@ export default function PropertyCard({
   similar = [],
   saved,
   onToggleSave,
+  onSave,
   onPass,
   onRewind,
   onNextProperty,
@@ -89,9 +89,7 @@ export default function PropertyCard({
   onDrawerChange,
   keysEnabled = true,
   voiceGender = 'female',
-  onFilterByAgent,
-  exitAnimation = null,
-  onExitComplete
+  onFilterByAgent
 }: Props) {
   const slides = useMemo(() => slidesOf(listing), [listing]);
   const [slide, setSlide] = useState(0);
@@ -111,26 +109,13 @@ export default function PropertyCard({
     null
   );
   const pointerStartRef = useRef<{ x: number; y: number } | null>(null);
+  // Last pointer sample + speed, so a release can tell a flick from a slow drag.
+  const pointerTrackRef = useRef<{ x: number; y: number; t: number; vx: number; vy: number } | null>(
+    null
+  );
 
   const agentProfile = getEstateAgentProfile(listing.agent_id);
   const youtubeId = youtubeIdOf(listing.video_url);
-
-  // Handle external button toss trigger (Pass / Save buttons)
-  useEffect(() => {
-    if (exitAnimation) {
-      setAnimatingExit(exitAnimation);
-      const timer = setTimeout(() => {
-        if (exitAnimation === 'save') {
-          if (!saved) onToggleSave(listing.raia_id);
-        } else if (exitAnimation === 'pass') {
-          onPass();
-        }
-        setAnimatingExit(null);
-        onExitComplete?.();
-      }, 240);
-      return () => clearTimeout(timer);
-    }
-  }, [exitAnimation, saved, listing.raia_id, onToggleSave, onPass, onExitComplete]);
 
   useEffect(() => {
     const v = videoRef.current;
@@ -251,6 +236,7 @@ export default function PropertyCard({
       } catch {}
     }
     pointerStartRef.current = { x: e.clientX, y: e.clientY };
+    pointerTrackRef.current = { x: e.clientX, y: e.clientY, t: e.timeStamp, vx: 0, vy: 0 };
     setIsDragging(true);
   };
 
@@ -258,25 +244,74 @@ export default function PropertyCard({
     if (!isDragging || !pointerStartRef.current) return;
     const dx = e.clientX - pointerStartRef.current.x;
     const dy = e.clientY - pointerStartRef.current.y;
+    const track = pointerTrackRef.current;
+    if (track) {
+      const dt = e.timeStamp - track.t;
+      if (dt > 0) {
+        track.vx = (e.clientX - track.x) / dt;
+        track.vy = (e.clientY - track.y) / dt;
+      }
+      track.x = e.clientX;
+      track.y = e.clientY;
+      track.t = e.timeStamp;
+    }
     setDragOffset({ x: dx, y: dy });
   };
 
-  const handlePointerUpOrCancel = (e: React.PointerEvent) => {
+  const releasePointer = (e: React.PointerEvent) => {
+    if (e.pointerType !== 'touch') return;
+    try {
+      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      }
+    } catch {}
+  };
+
+  const handlePassAction = () => {
+    stopNarration();
+    setAnimatingExit('pass');
+    setTimeout(() => {
+      onPass();
+      setAnimatingExit(null);
+      setDragOffset({ x: 0, y: 0 });
+    }, 240);
+  };
+
+  const handleSaveAction = () => {
+    stopNarration();
+    setAnimatingExit('save');
+    setTimeout(() => {
+      if (!saved) onToggleSave(listing.raia_id);
+      onSave();
+      setAnimatingExit(null);
+      setDragOffset({ x: 0, y: 0 });
+    }, 240);
+  };
+
+  const handlePointerCancel = (e: React.PointerEvent) => {
+    if (!isDragging) return;
+    releasePointer(e);
+    pointerStartRef.current = null;
+    pointerTrackRef.current = null;
+    setIsDragging(false);
+    // A cancelled gesture was never a decision — spring back untouched.
+    setDragOffset({ x: 0, y: 0 });
+  };
+
+  const handlePointerUp = (e: React.PointerEvent) => {
     if (!isDragging || !pointerStartRef.current) return;
-    if (e.pointerType === 'touch') {
-      try {
-        if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-          e.currentTarget.releasePointerCapture(e.pointerId);
-        }
-      } catch {}
-    }
+    releasePointer(e);
 
     const dx = e.clientX - pointerStartRef.current.x;
     const dy = e.clientY - pointerStartRef.current.y;
+    const track = pointerTrackRef.current;
+    // Only a sample this recent is still the release speed; older means the drag paused.
+    const flick = track && e.timeStamp - track.t < 100 ? track : null;
     pointerStartRef.current = null;
+    pointerTrackRef.current = null;
     setIsDragging(false);
 
-    const intent = classifyGesture({ dx, dy, tapMax: 15, swipeMin: 65 });
+    const intent = classifyGesture({ dx, dy, vx: flick?.vx, vy: flick?.vy });
 
     if (intent === 'tap') {
       setDragOffset({ x: 0, y: 0 });
@@ -292,22 +327,9 @@ export default function PropertyCard({
     }
 
     if (intent === 'pass') {
-      setAnimatingExit('pass');
-      stopNarration();
-      setTimeout(() => {
-        onPass();
-        setAnimatingExit(null);
-        setDragOffset({ x: 0, y: 0 });
-      }, 240);
+      handlePassAction();
     } else if (intent === 'save') {
-      setAnimatingExit('save');
-      stopNarration();
-      setTimeout(() => {
-        if (!saved) onToggleSave(listing.raia_id);
-        onNextProperty();
-        setAnimatingExit(null);
-        setDragOffset({ x: 0, y: 0 });
-      }, 240);
+      handleSaveAction();
     } else if (intent === 'next_property') {
       setAnimatingExit('up');
       stopNarration();
@@ -394,8 +416,8 @@ export default function PropertyCard({
         className="absolute inset-0 touch-none"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUpOrCancel}
-        onPointerCancel={handlePointerUpOrCancel}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerCancel}
       >
         {slides.length === 0 && (
           <div className="flex h-full items-center justify-center text-sm text-white/60">No media</div>
@@ -528,7 +550,7 @@ export default function PropertyCard({
           <Action label="Rewind" onClick={onRewind} size={44}>
             <RewindIcon />
           </Action>
-          <Action label="Pass" onClick={() => onPass()} size={56}>
+          <Action label="Pass" onClick={handlePassAction} size={56}>
             <PassIcon />
           </Action>
           <Action
@@ -545,7 +567,7 @@ export default function PropertyCard({
           </Action>
           <Action
             label={saved ? 'Remove from saved' : 'Save'}
-            onClick={() => onToggleSave(listing.raia_id)}
+            onClick={handleSaveAction}
             size={56}
             active={saved}
           >
