@@ -36,34 +36,24 @@ export default function HomePage() {
             MoveHome<span className="text-[var(--accent)]">.org</span>
           </span>
         </a>
-        <div className="flex items-center gap-4">
-          <a
-            href="/app"
-            className="text-sm font-medium text-[var(--text-dim)] hover:text-[var(--accent)] transition-colors hidden sm:inline-block focus:outline-none focus:ring-2 focus:ring-[var(--accent)] rounded"
-          >
-            Browse Properties
-          </a>
+        <div className="flex items-center gap-6">
           <a
             href="/registry"
-            className="text-sm font-medium text-[var(--text-dim)] hover:text-[var(--accent)] transition-colors hidden sm:inline-block focus:outline-none focus:ring-2 focus:ring-[var(--accent)] rounded"
+            className="text-sm font-medium text-[var(--text-dim)] hover:text-[var(--accent)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--accent)] rounded"
           >
-            Agent Registry
-          </a>
-          {/* The swipe deck lives on its own host; absolute URL on purpose —
-              a relative /app would loop through the host rewrite. */}
-          <a
-            href="https://app.movehome.org"
-            className="text-sm font-semibold text-[var(--accent)] hover:text-[var(--accent-hover)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--accent)] rounded"
-          >
-            Open Webapp
+            Agents
           </a>
           <a
-            href="https://estateaigents.org/charter.html"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-sm font-medium text-[var(--text-dim)] hover:text-[var(--accent)] transition-colors hidden sm:inline-block focus:outline-none focus:ring-2 focus:ring-[var(--accent)] rounded"
+            href="/charter"
+            className="text-sm font-medium text-[var(--text-dim)] hover:text-[var(--accent)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--accent)] rounded"
           >
-            The Charter
+            Charter
+          </a>
+          <a
+            href="/app"
+            className="text-sm font-medium text-[var(--text-dim)] hover:text-[var(--accent)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--accent)] rounded"
+          >
+            Properties
           </a>
           <ThemeToggle />
         </div>

@@ -143,6 +143,12 @@ export type Database = {
           location: unknown
           longitude: number | null
           marketing_description: string | null
+          marketing_description_ja: string | null
+          marketing_description_ms: string | null
+          marketing_description_th: string | null
+          marketing_description_zh: string | null
+          i18n_source_hash: string | null
+          i18n_status: string
           media: Json | null
           photo_count: number | null
           photo_url: string | null
@@ -199,6 +205,12 @@ export type Database = {
           location?: unknown
           longitude?: number | null
           marketing_description?: string | null
+          marketing_description_ja?: string | null
+          marketing_description_ms?: string | null
+          marketing_description_th?: string | null
+          marketing_description_zh?: string | null
+          i18n_source_hash?: string | null
+          i18n_status?: string
           media?: Json | null
           photo_count?: number | null
           photo_url?: string | null
@@ -255,6 +267,12 @@ export type Database = {
           location?: unknown
           longitude?: number | null
           marketing_description?: string | null
+          marketing_description_ja?: string | null
+          marketing_description_ms?: string | null
+          marketing_description_th?: string | null
+          marketing_description_zh?: string | null
+          i18n_source_hash?: string | null
+          i18n_status?: string
           media?: Json | null
           photo_count?: number | null
           photo_url?: string | null

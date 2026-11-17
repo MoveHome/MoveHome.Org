@@ -28,7 +28,7 @@ export function titleOf(l: Listing): string {
 // Two spec groups, nulls dropped so nothing ever renders "UNKNOWN"/"NA".
 export function specGroups(l: Listing): string[] {
   const rooms = [
-    l.bedrooms != null ? `${l.bedrooms} Bed` : null,
+    l.bedrooms != null ? (l.bedrooms === 0 ? 'Studio Flat' : `${l.bedrooms} Bed`) : null,
     l.bathrooms != null ? `${l.bathrooms} Bath` : null
   ].filter(Boolean);
   const size = [
@@ -78,7 +78,8 @@ export function resolveDefaultCountry(ipCountry: string | null | undefined): Cat
   return cc === 'TH' || cc === 'MY' ? cc : 'GB';
 }
 
-export type TtsLocale = 'en-GB' | 'th-TH' | 'ms-MY' | 'ja-JP';
+export type TtsLocale = 'en-GB' | 'th-TH' | 'ms-MY' | 'ja-JP' | 'zh-CN';
+export type AppLang = 'en' | 'th' | 'ja' | 'ms' | 'zh';
 
 // The spoken locale, shared by the request, the prefetch and the browser
 // fallback so every market reaches its own voice. Location (UN/LOCODE) wins
@@ -89,11 +90,14 @@ export function ttsLocaleOf(l: Listing): TtsLocale {
   if (locode.startsWith('TH')) return 'th-TH';
   if (locode.startsWith('MY')) return 'ms-MY';
   if (locode.startsWith('JP')) return 'ja-JP';
+  if (locode.startsWith('CN')) return 'zh-CN';
   if (l.jurisdiction === 'JP') return 'ja-JP';
+  if (l.jurisdiction === 'CN') return 'zh-CN';
   const country = countryOf(l);
   if (country === 'TH') return 'th-TH';
   if (country === 'MY') return 'ms-MY';
   if (l.currency === 'JPY') return 'ja-JP';
+  if (l.currency === 'CNY') return 'zh-CN';
   return 'en-GB';
 }
 
@@ -339,18 +343,59 @@ export const isYouTubeUrl = (url: string | null | undefined): boolean => youtube
 
 const DESCRIPTION_MAX = 480;
 
+const LOCAL_COPY: Record<AppLang, { pricePrefix: string; priceSuffix: string; cta: (vendor: string) => string }> = {
+  en: {
+    pricePrefix: 'And all this is only',
+    priceSuffix: '.',
+    cta: (vendor) => `Just send a message to ${vendor} to arrange a viewing!`
+  },
+  th: {
+    pricePrefix: 'และทั้งหมดนี้ในราคาเพียง',
+    priceSuffix: ' เท่านั้น',
+    cta: (vendor) => `เพียงส่งข้อความถึง ${vendor} เพื่อนัดหมายเข้าชม!`
+  },
+  ja: {
+    pricePrefix: 'これらすべてがわずか',
+    priceSuffix: 'です。',
+    cta: (vendor) => `内覧のご予約は ${vendor} にメッセージを送信してください！`
+  },
+  ms: {
+    pricePrefix: 'Dan semua ini hanya',
+    priceSuffix: '.',
+    cta: (vendor) => `Hanya hantar mesej kepada ${vendor} untuk mengatur janji temu melihat rumah!`
+  },
+  zh: {
+    pricePrefix: '所有这些仅需',
+    priceSuffix: '。',
+    cta: (vendor) => `只需发送消息给 ${vendor} 即可预约看房！`
+  }
+};
+
 // One script for every surface: the TTS endpoint, the browser voice fallback
 // and the written "About this property" card all end on price + vendor CTA.
 export function buildPropertyDescriptionWithCta(
   l: Listing,
-  vendorOrgName?: string | null
+  vendorOrgName?: string | null,
+  lang: AppLang = 'en'
 ): string {
-  const priceSentence = `And all this is only ${priceLabel(l)}.`;
-  const vendor = vendorOrgName?.trim() || 'the listing agent';
-  const ctaSentence = `Just send a message to ${vendor} to arrange a viewing!`;
+  const copy = LOCAL_COPY[lang] ?? LOCAL_COPY.en;
+  const priceSentence = `${copy.pricePrefix} ${priceLabel(l)}${copy.priceSuffix}`;
+  const vendor = vendorOrgName?.trim() || (lang === 'th' ? 'ตัวแทนอสังหาริมทรัพย์' : lang === 'ja' ? '不動産エージェント' : lang === 'ms' ? 'ejen hartanah' : lang === 'zh' ? '房产中介' : 'the listing agent');
+  const ctaSentence = copy.cta(vendor);
   const suffix = ` ${priceSentence} ${ctaSentence}`;
 
-  const desc = plainText(sanitizeDescription(l.marketing_description));
+  let rawProse: string | null = null;
+  if (l.i18n_status === 'ok') {
+    if (lang === 'th') rawProse = l.marketing_description_th ?? null;
+    else if (lang === 'ja') rawProse = l.marketing_description_ja ?? null;
+    else if (lang === 'ms') rawProse = l.marketing_description_ms ?? null;
+    else if (lang === 'zh') rawProse = l.marketing_description_zh ?? null;
+  }
+  if (!rawProse) {
+    rawProse = l.marketing_description;
+  }
+
+  const desc = plainText(sanitizeDescription(rawProse));
   const where = [l.suburb, l.postcode_district].filter(Boolean).join(', ');
   const fallback = `${titleOf(l)}${where ? ` in ${where}` : ''}, ${statusLabel(l).toLowerCase()}.`;
   const rawBody = desc || fallback;

@@ -7,7 +7,7 @@
 import { createHash } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { getListingByRaiaId } from '@/lib/queries';
-import { buildPropertyDescriptionWithCta } from '@/lib/property-card';
+import { buildPropertyDescriptionWithCta, type AppLang } from '@/lib/property-card';
 import { getEstateAgentProfile } from '@/lib/agent-directory';
 import { createSupabaseAdminClient } from '@/lib/supabase-admin';
 import {
@@ -272,8 +272,16 @@ async function withinMissBudget(ip: string, store: Store | null): Promise<boolea
   return false;
 }
 
-function scriptFor(l: Listing): string {
-  return buildPropertyDescriptionWithCta(l, getEstateAgentProfile(l.agent_id)?.name).slice(0, MAX_CHARS);
+function scriptFor(l: Listing, lang: TtsLang): string {
+  const appLangMap: Record<TtsLang, AppLang> = {
+    'en-GB': 'en',
+    'th-TH': 'th',
+    'ja-JP': 'ja',
+    'ms-MY': 'ms',
+    'zh-CN': 'zh'
+  };
+  const appLang = appLangMap[lang] ?? 'en';
+  return buildPropertyDescriptionWithCta(l, getEstateAgentProfile(l.agent_id)?.name, appLang).slice(0, MAX_CHARS);
 }
 
 class UpstreamError extends Error {
@@ -402,7 +410,7 @@ async function prune(
     const fresh = await getListingByRaiaId(raia_id);
     const validPaths = new Set<string>([writtenPath]);
     if (fresh) {
-      validPaths.add(cachePath(raia_id, lang, gender, scriptHash(scriptFor(fresh))));
+      validPaths.add(cachePath(raia_id, lang, gender, scriptHash(scriptFor(fresh, lang))));
     }
     const stale = (listed.data ?? [])
       .filter((e) => e.name.endsWith('.mp3'))
@@ -421,7 +429,7 @@ async function prune(
     // the current path immediately before deleting.
     const latest = await getListingByRaiaId(raia_id);
     if (latest) {
-      const current = cachePath(raia_id, lang, gender, scriptHash(scriptFor(latest)));
+      const current = cachePath(raia_id, lang, gender, scriptHash(scriptFor(latest, lang)));
       const keep = stale.filter((p) => p !== current);
       if (keep.length) await bucketOf(store).remove(keep);
     } else {
@@ -466,7 +474,13 @@ export async function GET(request: Request) {
     return json({ error: 'Invalid lang' }, 400);
   }
 
-  const script = scriptFor(listing);
+  // Check if requested non-English language translation is missing/failed when requested
+  // Exception: if i18n_status is not 'ok', allow fallback only if marketing_description_th/ja/ms/zh is populated or if tests/callers pass a listing without i18n fields
+  if (lang !== 'en-GB' && listing.i18n_status === 'failed') {
+    return json({ error: 'Translation not available for requested lang' }, 409, { 'X-I18n-Status': listing.i18n_status });
+  }
+
+  const script = scriptFor(listing, lang);
   const hash = scriptHash(script);
   const path = cachePath(raia_id, lang, gender, hash);
   const store = storage();

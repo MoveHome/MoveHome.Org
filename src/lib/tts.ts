@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { ttsLocaleOf } from './property-card';
 import type { Listing } from './types';
 
-export const TTS_LANGS = ['en-GB', 'th-TH', 'ms-MY', 'ja-JP'] as const;
+export const TTS_LANGS = ['en-GB', 'th-TH', 'ms-MY', 'ja-JP', 'zh-CN'] as const;
 export type TtsLang = (typeof TTS_LANGS)[number];
 export type VoiceGender = 'female' | 'male';
 
@@ -24,12 +24,19 @@ const DEFAULT_FEMALE_VOICE = '21m00Tcm4TlvDq8ikWAM';
 const DEFAULT_MALE_VOICE = 'ErXwobaYiN019PkySvjV';
 const DEFAULT_TH_FEMALE_VOICE = 'brM9iIbwDREZaWL8luun'; // Anna - Thailand Female
 const DEFAULT_TH_MALE_VOICE = 'xVv8qLTTnsYnrysc2Lx4'; // Thai - Deep, Formal and Professional
+const DEFAULT_ZH_FEMALE_VOICE = 'LcfcDJNUP1GQjkzn1xUU'; // Mandarin Female
+const DEFAULT_ZH_MALE_VOICE = 'g5CIjZEefAph4nQFvHAz'; // Mandarin Male
 
 export function voiceFor(lang: TtsLang, gender: VoiceGender): string {
   if (lang === 'th-TH') {
     return gender === 'male'
       ? process.env.ELEVENLABS_VOICE_ID_TH_MALE || DEFAULT_TH_MALE_VOICE
       : process.env.ELEVENLABS_VOICE_ID_TH_FEMALE || DEFAULT_TH_FEMALE_VOICE;
+  }
+  if (lang === 'zh-CN') {
+    return gender === 'male'
+      ? process.env.ELEVENLABS_VOICE_ID_ZH_MALE || DEFAULT_ZH_MALE_VOICE
+      : process.env.ELEVENLABS_VOICE_ID_ZH_FEMALE || DEFAULT_ZH_FEMALE_VOICE;
   }
   if (gender === 'male') {
     return process.env.ELEVENLABS_VOICE_ID_MALE || DEFAULT_MALE_VOICE;

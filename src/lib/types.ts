@@ -69,6 +69,12 @@ export interface Listing {
 
   headline: string | null;
   marketing_description: string | null;
+  marketing_description_th?: string | null;
+  marketing_description_ja?: string | null;
+  marketing_description_ms?: string | null;
+  marketing_description_zh?: string | null;
+  i18n_source_hash?: string | null;
+  i18n_status?: 'pending' | 'ok' | 'failed';
 
   latitude: number | null;
   longitude: number | null;
@@ -110,6 +116,7 @@ export interface Listing {
   floor_plan_url: string | null;
   video_url: string | null;
   tour_360_url: string | null;
+  agent_logo_url?: string | null;
 
   jurisdiction_extensions: JurisdictionExtensions | null;
 

@@ -55,11 +55,13 @@ describe('property-card helpers', () => {
     expect(statusLabel(listing({ listing_status: 'let_agreed' }))).toBe('Let Agreed · Register Interest');
   });
 
-  it('returns bare spec groups (the ✓ is rendered by the HUD)', () => {
+  it('formats spec groups correctly and normalizes 0 beds to Studio Flat', () => {
+    expect(specGroups(listing({ bedrooms: 0, bathrooms: 1 }))).toEqual(['Studio Flat · 1 Bath']);
     expect(specGroups(listing({ bedrooms: 2, bathrooms: 1, floor_area_sqm: 30 }))).toEqual([
       '2 Bed · 1 Bath',
       '30 m²'
     ]);
+    expect(specGroups(listing({ bedrooms: null, bathrooms: 1 }))).toEqual(['1 Bath']);
   });
 
   it('labels locations in plain English, never locodes', () => {

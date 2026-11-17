@@ -36,6 +36,13 @@ interface ExternalListingRow {
   building_number: string | null;
   suburb: string | null;
 
+  marketing_description_th?: string | null;
+  marketing_description_ja?: string | null;
+  marketing_description_ms?: string | null;
+  marketing_description_zh?: string | null;
+  i18n_source_hash?: string | null;
+  i18n_status?: string | null;
+
   property_type: string | null;
   service_type: 'long_term' | 'short_term' | 'sale';
   bedrooms: number | null;
@@ -89,6 +96,12 @@ function rowToListing(row: ExternalListingRow): Listing {
 
     headline: row.headline,
     marketing_description: row.marketing_description,
+    marketing_description_th: row.marketing_description_th ?? null,
+    marketing_description_ja: row.marketing_description_ja ?? null,
+    marketing_description_ms: row.marketing_description_ms ?? null,
+    marketing_description_zh: row.marketing_description_zh ?? null,
+    i18n_source_hash: row.i18n_source_hash ?? null,
+    i18n_status: (row.i18n_status as Listing['i18n_status']) ?? 'pending',
 
     latitude: row.latitude,
     longitude: row.longitude,
