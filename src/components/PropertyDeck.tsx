@@ -9,6 +9,7 @@ import type { Listing } from '@/lib/types';
 import PropertyCard from './PropertyCard';
 import ThemeToggle from './ThemeToggle';
 import {
+  availabilityOf,
   catalogCities,
   countryOf,
   feedOf,
@@ -31,6 +32,15 @@ const CHANNEL_KEY = 'movehome.channel.v1';
 type Tab = 'explore' | 'saved' | 'viewings';
 type Service = 'all' | 'long_term' | 'short_term' | 'sale';
 type Country = 'GB' | 'TH' | 'MY';
+type AvailabilityFilter = 'all' | 'now' | 'soon' | 'unavailable';
+type SwipeAction = { raia_id: string; action: 'pass' | 'save' };
+
+const AVAILABILITY_FILTERS: [AvailabilityFilter, string][] = [
+  ['all', 'Any'],
+  ['now', 'Available Now'],
+  ['soon', 'Available Soon'],
+  ['unavailable', 'Unavailable']
+];
 
 // Pinned first in the Locations picker; selecting it clears the filter.
 const ALL_LOCATIONS = 'All Locations';
@@ -126,6 +136,7 @@ export default function PropertyDeck({
   const [service, setService] = useState<Service>('all');
   const [budget, setBudget] = useState(0);
   const [beds, setBeds] = useState(-1);
+  const [availability, setAvailability] = useState<AvailabilityFilter>('all');
   const [prompt, setPrompt] = useState('');
   const [voiceGender, setVoiceGender] = useState<'female' | 'male'>('female');
   const [appLang, setAppLang] = useState<AppLang>('en');
@@ -137,6 +148,8 @@ export default function PropertyDeck({
   const [drawer, setDrawer] = useState(false);
   const [tab, setTab] = useState<Tab>('explore');
   const [saved, setSaved] = useState<string[]>([]);
+  // Client-only recent swipes; the deck never persists a pass/save server-side.
+  const [undoStack, setUndoStack] = useState<SwipeAction[]>([]);
   // An immersive 360/YouTube viewer owns the screen; deck keys and swipes stand down.
   const [viewerOpen, setViewerOpen] = useState(false);
   const [feed, setFeed] = useState<Feed>('rentals');
@@ -262,6 +275,7 @@ export default function PropertyDeck({
     (service !== 'all' ? 1 : 0) +
     (budget > 0 ? 1 : 0) +
     (beds >= 0 ? 1 : 0) +
+    (availability !== 'all' ? 1 : 0) +
     (prompt.trim() ? 1 : 0);
 
   const stream = useMemo(() => {
@@ -289,6 +303,7 @@ export default function PropertyDeck({
         if (price != null && price > budget) return false;
       }
       if (beds >= 1 && (l.bedrooms ?? 0) < beds) return false;
+      if (availability !== 'all' && availabilityOf(l) !== availability) return false;
       // Every keyword must match: refinement, not recall.
       if (tokens.length) {
         const hay = haystack(l);
@@ -296,7 +311,7 @@ export default function PropertyDeck({
       }
       return true;
     });
-  }, [listings, country, locations, service, budget, beds, prompt, tab, saved, feed]);
+  }, [listings, country, locations, service, budget, beds, availability, prompt, tab, saved, feed]);
 
   const safeIndex = Math.min(index, Math.max(0, stream.length - 1));
   const current = stream[safeIndex];
@@ -306,7 +321,7 @@ export default function PropertyDeck({
   useEffect(() => {
     setIndex(0);
     setDrawer(false);
-  }, [country, locations, service, budget, beds, prompt, tab]);
+  }, [country, locations, service, budget, beds, availability, prompt, tab]);
 
   // Silently warm the next card's first frame (image or video poster) and prefetch audio TTS.
   useEffect(() => {
@@ -335,6 +350,28 @@ export default function PropertyDeck({
   const go = (delta: number) => {
     setDrawer(false);
     setIndex(Math.max(0, Math.min(stream.length - 1, safeIndex + delta)));
+  };
+
+  // Optimistic, capped at 10. Undo jumps back to the card and tells the server
+  // to roll the action back.
+  const swipe = (action: SwipeAction['action']) => {
+    if (!current) return;
+    setUndoStack((prev) => [...prev, { raia_id: current.raia_id, action }].slice(-10));
+    go(1);
+  };
+
+  const undo = () => {
+    const last = undoStack[undoStack.length - 1];
+    if (!last) return;
+    setUndoStack(undoStack.slice(0, -1));
+    const i = stream.findIndex((l) => l.raia_id === last.raia_id);
+    setDrawer(false);
+    setIndex(i >= 0 ? i : Math.max(0, safeIndex - 1));
+    fetch('/api/feed/undo-swipe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(last)
+    }).catch(() => {});
   };
 
   // Keyboard: arrows move property (↑/↓) or photo (←/→); i/Enter opens details.
@@ -479,7 +516,7 @@ export default function PropertyDeck({
                 onToggleSave={() => {}}
                 onSave={() => {}}
                 onPass={() => {}}
-                onRewind={() => {}}
+                onUndo={() => {}}
                 onNextProperty={() => {}}
                 onPrevProperty={() => {}}
                 onSelect={() => {}}
@@ -499,9 +536,9 @@ export default function PropertyDeck({
               )}
               saved={saved.includes(current.raia_id)}
               onToggleSave={toggleSave}
-              onSave={() => go(1)}
-              onPass={() => go(1)}
-              onRewind={() => go(-1)}
+              onSave={() => swipe('save')}
+              onPass={() => swipe('pass')}
+              onUndo={undo}
               onNextProperty={() => go(1)}
               onPrevProperty={() => go(-1)}
               drawer={drawer}
@@ -735,6 +772,14 @@ export default function PropertyDeck({
                 <PillRow options={BEDROOMS} value={beds} onChange={(v) => setBeds(Number(v))} />
               </Section>
 
+              <Section title="Availability">
+                <PillRow
+                  options={AVAILABILITY_FILTERS}
+                  value={availability}
+                  onChange={(v) => setAvailability(v as AvailabilityFilter)}
+                />
+              </Section>
+
               <Section title="Preferred contact channel">
                 <PillRow
                   options={[
@@ -778,6 +823,7 @@ export default function PropertyDeck({
                   setService('all');
                   setBudget(0);
                   setBeds(-1);
+                  setAvailability('all');
                   setPrompt('');
                   pickVoice('female');
                   pickChannel('Personal AI Agent');

@@ -59,13 +59,24 @@ describe('specGroups', () => {
 });
 
 describe('statusLabel', () => {
-  it('marks an available listing vacant now', () => {
-    expect(statusLabel(listing())).toBe('Vacant · Available Now');
+  const now = new Date('2026-01-01T00:00:00Z');
+
+  it('marks an available listing available now', () => {
+    expect(statusLabel(listing(), now)).toBe('Available Now');
   });
 
-  it('shows a future availability date', () => {
-    const future = new Date(Date.now() + 30 * 864e5).toISOString();
-    expect(statusLabel(listing({ available_from: future }))).toMatch(/^Available \d{1,2} \w{3}$/);
+  it('shows a future availability date in the country convention', () => {
+    expect(statusLabel(listing({ available_from: '2026-10-14' }), now)).toBe('Available 14/10/2026');
+    expect(
+      statusLabel(
+        listing({ available_from: '2026-10-14', jurisdiction: 'GB', currency: 'GBP', un_locode: 'GBLON' }),
+        now
+      )
+    ).toBe('Available 14/10/26');
+  });
+
+  it('marks non-live statuses unavailable', () => {
+    expect(statusLabel(listing({ listing_status: 'let_agreed' }), now)).toBe('Unavailable');
   });
 });
 

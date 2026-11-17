@@ -337,7 +337,7 @@ export async function getListingByRef(agent_id: string, ref: string): Promise<Li
   const match = results.find((l) => {
     if (l.external_id && l.external_id.toLowerCase() === cleanedRef) return true;
     if (l.raia_id.toLowerCase() === cleanedRef) return true;
-    if (l.raia_id.toLowerCase().endsWith(cleanedRef)) return true;
+    if (l.raia_id.toLowerCase().includes(cleanedRef)) return true;
     return false;
   });
 

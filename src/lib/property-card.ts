@@ -42,27 +42,39 @@ export function specGroups(l: Listing): string[] {
   return [rooms.join(' · '), size.join(' · ')].filter(Boolean);
 }
 
-// Vacant = live and not future-dated. Drives the HUD dot colour and copy.
+export type Availability = 'now' | 'soon' | 'unavailable';
+
+// The status decides whether the listing is live at all; the date then splits
+// live listings into "now" and "soon". Drives the pill colour and filter.
+export function availabilityOf(l: Listing, now: Date = new Date()): Availability {
+  if (l.listing_status && l.listing_status !== 'available') return 'unavailable';
+  if (!l.available_from || new Date(l.available_from) <= now) return 'now';
+  return 'soon';
+}
+
 export function isVacant(l: Listing, now: Date = new Date()): boolean {
-  if (l.listing_status && l.listing_status !== 'available') return false;
-  return !l.available_from || new Date(l.available_from) <= now;
+  return availabilityOf(l, now) === 'now';
+}
+
+// GB reads day-first with a 2-digit year; TH/MY keep the full year.
+export function formatAvailabilityDate(l: Listing, date: Date): string {
+  const dd = String(date.getUTCDate()).padStart(2, '0');
+  const mm = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const year =
+    countryOf(l) === 'GB'
+      ? String(date.getUTCFullYear()).slice(-2)
+      : String(date.getUTCFullYear());
+  return `${dd}/${mm}/${year}`;
 }
 
 export function statusLabel(l: Listing, now: Date = new Date()): string {
-  if (l.listing_status === 'let_agreed') {
-    return 'Let Agreed · Register Interest';
-  }
-  if (l.listing_status === 'withdrawn') {
-    return 'Off-Market · Test View';
-  }
-  if (l.listing_status === 'available' || !l.listing_status) {
-    if (!isVacant(l, now)) {
-      const d = new Date(l.available_from as string);
-      return `Available ${d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`;
-    }
-    return 'Vacant · Available Now';
-  }
-  return l.listing_status.replace(/_/g, ' ');
+  const availability = availabilityOf(l, now);
+  if (availability === 'now') return 'Available Now';
+  if (availability === 'unavailable') return 'Unavailable';
+  const d = new Date(l.available_from as string);
+  return Number.isNaN(d.getTime())
+    ? 'Available Soon'
+    : `Available ${formatAvailabilityDate(l, d)}`;
 }
 
 export function countryOf(l: Listing): CatalogCountry | null {

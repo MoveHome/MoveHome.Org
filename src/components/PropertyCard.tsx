@@ -5,7 +5,6 @@
 // viewing slot sheet, clickable Estate Agent pill, and Giraffe 360 virtual tour modal.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import Link from 'next/link';
 import type { Listing } from '@/lib/types';
 import { getEstateAgentProfile } from '@/lib/agent-directory';
 import { classifyGesture } from '@/lib/gesture';
@@ -15,7 +14,7 @@ import CrmRefPill from './CrmRefPill';
 import { getCrmRef } from '@/lib/agent-routing';
 import {
   buildPropertyDescriptionWithCta,
-  isVacant,
+  availabilityOf,
   mediaSlidesOf,
   priceLabel,
   specGroups,
@@ -39,7 +38,7 @@ interface Props {
   onToggleSave: (id: string) => void;
   onSave: () => void;
   onPass: () => void;
-  onRewind: () => void;
+  onUndo: () => void;
   onNextProperty: () => void;
   onPrevProperty: () => void;
   onSelect: (id: string) => void;
@@ -78,7 +77,7 @@ export default function PropertyCard({
   onToggleSave,
   onSave,
   onPass,
-  onRewind,
+  onUndo,
   onNextProperty,
   onPrevProperty,
   onSelect,
@@ -408,7 +407,12 @@ export default function PropertyCard({
   const showPassBadge = (isDragging && dragOffset.x < -35 && Math.abs(dragOffset.x) >= Math.abs(dragOffset.y)) || animatingExit === 'pass';
   const showSaveBadge = (isDragging && dragOffset.x > 35 && Math.abs(dragOffset.x) >= Math.abs(dragOffset.y)) || animatingExit === 'save';
 
-  const vacant = isVacant(listing);
+  const availability = availabilityOf(listing);
+  const availabilityTone = {
+    now: 'bg-[#067647] text-white',
+    soon: 'bg-[#FACC15] text-[#111827]',
+    unavailable: 'bg-[#DC2626] text-white'
+  }[availability];
 
   // Address obfuscation: display obfuscated public area strings (e.g. Fitzrovia, London E3). Never expose flat/door numbers.
   const publicAreaLocation = [listing.suburb, listing.un_locode ? areaOf(listing) : null, listing.postcode_district].filter(Boolean).join(', ') || areaOf(listing);
@@ -540,39 +544,20 @@ export default function PropertyCard({
         </div>
       )}
 
-      {/* ── Top Bar Header: Agent Logo Pill (Top-Left) & Floating Badges ── */}
+      {/* ── Top Header: Availability Pill (left) & Details Pill (right) ── */}
       <div className="pointer-events-none absolute inset-x-3 top-6 z-20 flex items-center justify-between gap-2">
-        {/* Top-Left Agent Storefront Pill Overlay */}
-        <div className="pointer-events-auto">
-          {agentProfile ? (
-            <Link
-              href={`/${agentProfile.slug}`}
-              className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-950/80 px-3 py-1.5 text-xs font-semibold text-emerald-300 backdrop-blur hover:bg-emerald-900/80 transition shadow-lg"
-              aria-label={`View ${agentProfile.name} Storefront`}
-            >
-              {(listing.agent_logo_url || agentProfile.logo_url) ? (
-                <span className="flex h-5 items-center rounded bg-white/90 px-1">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={listing.agent_logo_url || agentProfile.logo_url!}
-                    alt={agentProfile.name}
-                    className="h-4 w-auto object-contain max-w-[90px]"
-                  />
-                </span>
-              ) : (
-                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-700 text-[9px] font-bold text-white">
-                  {agentProfile.name.slice(0, 2).toUpperCase()}
-                </span>
-              )}
-              <span className="truncate max-w-[120px] sm:max-w-[160px] text-[11px]">{agentProfile.name}</span>
-            </Link>
-          ) : (
-            <div />
-          )}
-        </div>
+        <span
+          data-testid="availability-pill"
+          className={`pointer-events-auto inline-flex items-center whitespace-nowrap rounded-full px-3 py-1.5 text-[11px] font-bold shadow-lg ${availabilityTone}`}
+          style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
+        >
+          {statusLabel(listing)}
+        </span>
 
-        {/* Top-Right Details Button */}
-        <div className="pointer-events-auto">
+        <div
+          className="pointer-events-auto min-w-0 overflow-hidden text-ellipsis"
+          style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}
+        >
           <DescriptionToggleButton open={false} onClick={() => onDrawerChange(true)} />
         </div>
       </div>
@@ -591,10 +576,6 @@ export default function PropertyCard({
         )}
       </div>
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black via-black/75 to-transparent px-4 pb-4 pt-28">
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1 text-[11px] font-bold text-zinc-950">
-          <span className={`h-2 w-2 rounded-full ${vacant ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-          {statusLabel(listing)}
-        </span>
         <div className="mt-2 text-[26px] font-extrabold leading-none tracking-tight text-white">
           {priceLabel(listing)}
         </div>
@@ -602,8 +583,8 @@ export default function PropertyCard({
 
         {/* 5 standard action circles */}
         <div className="pointer-events-auto mt-4 flex items-center justify-center gap-3">
-          <Action label="Rewind" onClick={onRewind} size={44}>
-            <RewindIcon />
+          <Action label="Undo" onClick={onUndo} size={44}>
+            <UndoIcon />
           </Action>
           <Action label="Pass" onClick={handlePassAction} size={56}>
             <PassIcon />
@@ -949,11 +930,11 @@ function Action({
   );
 }
 
-function RewindIcon() {
+function UndoIcon() {
   return (
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#facc15" strokeWidth="2.5">
-      <polygon points="11 19 2 12 11 5 11 19" />
-      <polygon points="22 19 13 12 22 5 22 19" />
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#facc15" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="19" y1="12" x2="5" y2="12" />
+      <polyline points="12 19 5 12 12 5" />
     </svg>
   );
 }
