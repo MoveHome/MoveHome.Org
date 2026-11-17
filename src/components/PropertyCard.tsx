@@ -393,7 +393,7 @@ export default function PropertyCard({
   const showSaveBadge = (isDragging && dragOffset.x > 35 && Math.abs(dragOffset.x) >= Math.abs(dragOffset.y)) || animatingExit === 'save';
 
   const vacant = isVacant(listing);
-  const isVideoSlide = slides[activeSlideIndex]?.kind === 'video';
+  const isVideoMedia = slides[activeSlideIndex]?.kind === 'video';
 
   const location = [listing.building_number, listing.street_name, listing.suburb, listing.postcode_full]
     .filter(Boolean)

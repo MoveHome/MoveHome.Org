@@ -161,6 +161,22 @@ function rowToListing(row: ExternalListingRow): Listing {
 // shortcut: the publish_from/publish_until window is still RLS-only; no live row
 // sets it — add it here if the feed starts scheduling publication.
 
+// The listing row carries agent_id only; the display logo lives on the
+// approved-agent view. One extra read decorates the page for the card pill.
+export async function withAgentLogos(listings: Listing[]): Promise<Listing[]> {
+  const sb = getSupabase();
+  if (!sb || listings.length === 0) return listings;
+  const ids = [...new Set(listings.map((l) => l.agent_id).filter(Boolean))];
+  if (ids.length === 0) return listings;
+  const { data } = await sb
+    .from('vw_raia_agent_registry_public')
+    .select('agent_id,logo_url')
+    .in('agent_id', ids);
+  const logos = new Map<string, string | null>();
+  for (const a of data ?? []) if (a.agent_id) logos.set(a.agent_id, a.logo_url);
+  return listings.map((l) => ({ ...l, agent_logo_url: logos.get(l.agent_id) ?? null }));
+}
+
 export async function searchListings(
   params: SearchParams = {}
 ): Promise<{ results: Listing[]; total: number }> {
@@ -202,9 +218,11 @@ export async function searchListings(
   }
   // Re-rank the fetched page so a media-less fixture never lands first; the
   // synced_at order inside each group is preserved by the stable sort.
-  const results = (data ?? [])
-    .map((r) => rowToListing(r as ExternalListingRow))
-    .sort((a, b) => Number(hasMedia(b)) - Number(hasMedia(a)));
+  const results = await withAgentLogos(
+    (data ?? [])
+      .map((r) => rowToListing(r as ExternalListingRow))
+      .sort((a, b) => Number(hasMedia(b)) - Number(hasMedia(a)))
+  );
   return {
     results,
     total: count ?? 0
@@ -233,7 +251,8 @@ export async function getListingByRaiaId(raia_id: string, signal?: AbortSignal):
     return null;
   }
   if (!data) return null;
-  return rowToListing(data as ExternalListingRow);
+  const [listing] = await withAgentLogos([rowToListing(data as ExternalListingRow)]);
+  return listing;
 }
 
 export async function getMapPins(params: SearchParams = {}): Promise<MapPin[]> {

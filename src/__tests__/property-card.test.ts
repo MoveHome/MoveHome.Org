@@ -47,6 +47,16 @@ describe('property-card helpers', () => {
     );
   });
 
+  it('rewrites 0-bed headlines as Studio Flat', () => {
+    expect(titleOf(listing({ bedrooms: 0, headline: 'Bright 0 Bed Flat, Shoreditch' }))).toBe(
+      'Bright Studio Flat, Shoreditch'
+    );
+    expect(titleOf(listing({ bedrooms: 0, headline: '0-bed flat in Camden' }))).toBe(
+      'Studio Flat in Camden'
+    );
+    expect(titleOf(listing({ bedrooms: 1, headline: '1 Bed Flat' }))).toBe('1 Bed Flat');
+  });
+
   it('reports vacancy and renders it without emoji', () => {
     expect(isVacant(listing({ listing_status: 'available' }))).toBe(true);
     expect(statusLabel(listing({ listing_status: 'available' }))).toBe('Vacant · Available Now');

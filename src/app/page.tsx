@@ -29,29 +29,29 @@ export default function HomePage() {
     <div className="min-h-screen flex flex-col justify-between bg-[var(--bg)] text-[var(--text)] font-sans selection:bg-[var(--tint-light)] selection:text-[var(--accent-hover)]">
 
       {/* Navigation */}
-      <nav className="fixed top-0 left-0 right-0 z-50 h-16 border-b border-[var(--border)] bg-[var(--bg)]/80 backdrop-blur-md px-6 md:px-12 flex items-center justify-between">
+      <nav className="fixed top-0 left-0 right-0 z-50 flex min-h-16 flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-[var(--border)] bg-[var(--bg)]/80 px-4 py-2 backdrop-blur-md sm:px-6 md:px-12">
         <a href="#" className="flex items-center gap-3 group focus:outline-none focus:ring-2 focus:ring-[var(--accent)] rounded-md px-2 py-1">
           <BotInShield className="w-8 h-8 group-hover:scale-105 transition-transform" />
-          <span className="text-lg font-bold tracking-tight font-sans">
+          <span className="text-base font-bold tracking-tight font-sans sm:text-lg">
             MoveHome<span className="text-[var(--accent)]">.org</span>
           </span>
         </a>
-        <div className="flex items-center gap-6">
+        <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1 sm:gap-6">
           <a
             href="/registry"
-            className="text-sm font-medium text-[var(--text-dim)] hover:text-[var(--accent)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--accent)] rounded"
+            className="text-xs font-medium text-[var(--text-dim)] hover:text-[var(--accent)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--accent)] rounded sm:text-sm"
           >
             Agents
           </a>
           <a
             href="/charter"
-            className="text-sm font-medium text-[var(--text-dim)] hover:text-[var(--accent)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--accent)] rounded"
+            className="text-xs font-medium text-[var(--text-dim)] hover:text-[var(--accent)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--accent)] rounded sm:text-sm"
           >
             Charter
           </a>
           <a
             href="/app"
-            className="text-sm font-medium text-[var(--text-dim)] hover:text-[var(--accent)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--accent)] rounded"
+            className="text-xs font-medium text-[var(--text-dim)] hover:text-[var(--accent)] transition-colors focus:outline-none focus:ring-2 focus:ring-[var(--accent)] rounded sm:text-sm"
           >
             Properties
           </a>
