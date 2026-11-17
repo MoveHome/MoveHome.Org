@@ -59,6 +59,7 @@ export interface JurisdictionExtensions {
 // row in src/lib/queries.ts — denormalised photo fields come from the media JSONB.
 export interface Listing {
   raia_id: string;
+  external_id?: string | null;
   agent_id: string;
   agent_card_url: string | null;
   enquiry_endpoint: string | null;
@@ -129,6 +130,7 @@ export interface Listing {
 }
 
 export interface SearchParams {
+  agent_id?: string;
   un_locode?: string;
   bbox?: { sw_lat: number; sw_lon: number; ne_lat: number; ne_lon: number };
   service_type?: ServiceType;

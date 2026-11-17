@@ -16,6 +16,7 @@ import type {
 
 interface ExternalListingRow {
   raia_id: string;
+  external_id?: string | null;
   agent_id: string;
   agent_card_url: string | null;
   enquiry_endpoint: string | null;
@@ -86,6 +87,7 @@ function rowToListing(row: ExternalListingRow): Listing {
   const photos = Array.isArray(media.photos) ? (media.photos as ListingPhoto[]) : [];
   return {
     raia_id: row.raia_id,
+    external_id: row.external_id ?? null,
     agent_id: row.agent_id,
     agent_card_url: row.agent_card_url,
     enquiry_endpoint: row.enquiry_endpoint,
@@ -199,6 +201,7 @@ export async function searchListings(
     .or('agent_id.is.null,agent_id.neq.org-gb-mcptest')
     .order('synced_at', { ascending: false });
 
+  if (params.agent_id) query = query.eq('agent_id', params.agent_id);
   if (params.un_locode) query = query.eq('un_locode', params.un_locode);
   if (params.service_type) query = query.eq('service_type', params.service_type);
   if (params.property_type) query = query.eq('property_type', params.property_type);
@@ -308,4 +311,35 @@ export async function getAgent(agent_id: string): Promise<Agent | null> {
     return null;
   }
   return (data ?? null) as Agent | null;
+}
+
+export async function getListingByRef(agent_id: string, ref: string): Promise<Listing | null> {
+  const sb = getSupabase();
+  if (sb) {
+    const { data } = await sb
+      .from('tbl_external_raia_listings')
+      .select('*')
+      .eq('agent_id', agent_id)
+      .is('withdrawn_at', null)
+      .eq('visibility', 'public')
+      .or(`external_id.eq.${ref},raia_id.eq.${ref},raia_id.ilike.%${ref}%`)
+      .limit(1)
+      .maybeSingle();
+
+    if (data) {
+      const [listing] = await withAgentLogos([rowToListing(data as ExternalListingRow)]);
+      return listing;
+    }
+  }
+
+  const { results } = await searchListings({ agent_id, limit: 100 });
+  const cleanedRef = ref.trim().toLowerCase();
+  const match = results.find((l) => {
+    if (l.external_id && l.external_id.toLowerCase() === cleanedRef) return true;
+    if (l.raia_id.toLowerCase() === cleanedRef) return true;
+    if (l.raia_id.toLowerCase().endsWith(cleanedRef)) return true;
+    return false;
+  });
+
+  return match ?? null;
 }
