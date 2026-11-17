@@ -19,12 +19,14 @@ import {
   clusterOf,
   ttsLocaleOf,
   type AppLang,
+  type ContactChannel,
   type Feed
 } from '@/lib/property-card';
 
 const SAVED_KEY = 'movehome.saved.v1';
 const VOICE_KEY = 'movehome.voice.v1';
 const LANG_KEY = 'movehome.lang.v1';
+const CHANNEL_KEY = 'movehome.channel.v1';
 
 type Tab = 'explore' | 'saved' | 'viewings';
 type Service = 'all' | 'long_term' | 'short_term' | 'sale';
@@ -118,6 +120,7 @@ export default function PropertyDeck({
   const [prompt, setPrompt] = useState('');
   const [voiceGender, setVoiceGender] = useState<'female' | 'male'>('female');
   const [appLang, setAppLang] = useState<AppLang>('en');
+  const [contactChannel, setContactChannel] = useState<ContactChannel>('Personal AI Agent');
   const [modalLocQuery, setModalLocQuery] = useState('');
   const [modalLocPicking, setModalLocPicking] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
@@ -143,13 +146,17 @@ export default function PropertyDeck({
   const setIndex = (n: number) => setCursors((c) => ({ ...c, [feed]: n }));
 
   useEffect(() => {
-    setMounted(true);
-    setSaved(readSaved());
-    if (localStorage.getItem(VOICE_KEY) === 'male') setVoiceGender('male');
-    const storedLang = localStorage.getItem(LANG_KEY) as AppLang | null;
-    if (storedLang && ['en', 'th', 'ja', 'ms', 'zh'].includes(storedLang)) {
-      setAppLang(storedLang);
-    }
+  setMounted(true);
+  setSaved(readSaved());
+  if (localStorage.getItem(VOICE_KEY) === 'male') setVoiceGender('male');
+  const storedLang = localStorage.getItem(LANG_KEY) as AppLang | null;
+  if (storedLang && ['en', 'th', 'ja', 'ms', 'zh'].includes(storedLang)) {
+    setAppLang(storedLang);
+  }
+  const storedChannel = localStorage.getItem(CHANNEL_KEY) as ContactChannel | null;
+  if (storedChannel && ['Personal AI Agent', 'WhatsApp', 'Telegram'].includes(storedChannel)) {
+    setContactChannel(storedChannel);
+  }
     const q = new URLSearchParams(window.location.search).get('feed');
     if (q === 'sales' || q === 'rentals') setFeed(q);
   }, []);
@@ -177,6 +184,15 @@ export default function PropertyDeck({
     setVoiceGender(g);
     try {
       localStorage.setItem(VOICE_KEY, g);
+    } catch {
+      /* private mode — keep in-memory only */
+    }
+  }
+
+  function pickChannel(ch: ContactChannel) {
+    setContactChannel(ch);
+    try {
+      localStorage.setItem(CHANNEL_KEY, ch);
     } catch {
       /* private mode — keep in-memory only */
     }
@@ -486,6 +502,7 @@ export default function PropertyDeck({
               onViewerChange={setViewerOpen}
               voiceGender={voiceGender}
               appLang={appLang}
+              contactChannel={contactChannel}
               onSelect={(id) => {
                 const i = stream.findIndex((l) => l.raia_id === id);
                 if (i >= 0) go(i - safeIndex);
@@ -518,11 +535,6 @@ export default function PropertyDeck({
             </button>
           </div>
         </div>
-        <p className="pt-1 text-center text-[10px] text-[var(--text-faint)]">
-          {current
-            ? `${safeIndex + 1} / ${stream.length} · swipe ↑↓ browse · ←→ pass/save · tap edges for photos`
-            : '—'}
-        </p>
       </main>
 
       {/* Bottom navigation */}
@@ -715,6 +727,18 @@ export default function PropertyDeck({
                 <PillRow options={BEDROOMS} value={beds} onChange={(v) => setBeds(Number(v))} />
               </Section>
 
+              <Section title="Preferred contact channel">
+                <PillRow
+                  options={[
+                    ['Personal AI Agent', 'Personal AI Agent'],
+                    ['WhatsApp', 'WhatsApp'],
+                    ['Telegram', 'Telegram']
+                  ]}
+                  value={contactChannel}
+                  onChange={(v) => pickChannel(v as ContactChannel)}
+                />
+              </Section>
+
               <Section title="Narration voice">
                 <PillRow
                   options={[
@@ -748,6 +772,7 @@ export default function PropertyDeck({
                   setBeds(-1);
                   setPrompt('');
                   pickVoice('female');
+                  pickChannel('Personal AI Agent');
                 }}
                 className="w-full rounded-full border border-[var(--border)] py-2 text-[11px] font-semibold text-[var(--text-dim)] hover:text-[var(--text)]"
               >

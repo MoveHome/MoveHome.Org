@@ -412,31 +412,33 @@ export function mediaSlidesOf(l: Listing): MediaSlide[] {
 
 const DESCRIPTION_MAX = 480;
 
-const LOCAL_COPY: Record<AppLang, { pricePrefix: string; priceSuffix: string; cta: (vendor: string) => string }> = {
+export type ContactChannel = 'Personal AI Agent' | 'WhatsApp' | 'Telegram';
+
+const LOCAL_COPY: Record<AppLang, { pricePrefix: string; priceSuffix: string; cta: (vendor: string, channel?: ContactChannel) => string }> = {
   en: {
     pricePrefix: 'And all this is only',
     priceSuffix: '.',
-    cta: (vendor) => `Just send a message to ${vendor} to arrange a viewing!`
+    cta: (vendor, channel = 'Personal AI Agent') => `Contact ${vendor} via ${channel} below.`
   },
   th: {
     pricePrefix: 'และทั้งหมดนี้ในราคาเพียง',
     priceSuffix: ' เท่านั้น',
-    cta: (vendor) => `เพียงส่งข้อความถึง ${vendor} เพื่อนัดหมายเข้าชม!`
+    cta: (vendor, channel = 'Personal AI Agent') => `ติดต่อ ${vendor} ผ่าน ${channel} ด้านล่าง`
   },
   ja: {
     pricePrefix: 'これらすべてがわずか',
     priceSuffix: 'です。',
-    cta: (vendor) => `内覧のご予約は ${vendor} にメッセージを送信してください！`
+    cta: (vendor, channel = 'Personal AI Agent') => `以下の ${channel} 経由で ${vendor} に連絡してください。`
   },
   ms: {
     pricePrefix: 'Dan semua ini hanya',
     priceSuffix: '.',
-    cta: (vendor) => `Hanya hantar mesej kepada ${vendor} untuk mengatur janji temu melihat rumah!`
+    cta: (vendor, channel = 'Personal AI Agent') => `Hubungi ${vendor} melalui ${channel} di bawah.`
   },
   zh: {
     pricePrefix: '所有这些仅需',
     priceSuffix: '。',
-    cta: (vendor) => `只需发送消息给 ${vendor} 即可预约看房！`
+    cta: (vendor, channel = 'Personal AI Agent') => `请通过下方 ${channel} 联系 ${vendor}。`
   }
 };
 
@@ -445,12 +447,13 @@ const LOCAL_COPY: Record<AppLang, { pricePrefix: string; priceSuffix: string; ct
 export function buildPropertyDescriptionWithCta(
   l: Listing,
   vendorOrgName?: string | null,
-  lang: AppLang = 'en'
+  lang: AppLang = 'en',
+  contactChannel: ContactChannel = 'Personal AI Agent'
 ): string {
   const copy = LOCAL_COPY[lang] ?? LOCAL_COPY.en;
   const priceSentence = `${copy.pricePrefix} ${priceLabel(l)}${copy.priceSuffix}`;
   const vendor = vendorOrgName?.trim() || (lang === 'th' ? 'ตัวแทนอสังหาริมทรัพย์' : lang === 'ja' ? '不動産エージェント' : lang === 'ms' ? 'ejen hartanah' : lang === 'zh' ? '房产中介' : 'the listing agent');
-  const ctaSentence = copy.cta(vendor);
+  const ctaSentence = copy.cta(vendor, contactChannel);
   const suffix = ` ${priceSentence} ${ctaSentence}`;
 
   let rawProse: string | null = null;
@@ -465,9 +468,35 @@ export function buildPropertyDescriptionWithCta(
   }
 
   const desc = plainText(sanitizeDescription(rawProse));
-  const where = [l.suburb, l.postcode_district].filter(Boolean).join(', ');
-  const fallback = `${titleOf(l)}${where ? ` in ${where}` : ''}, ${statusLabel(l).toLowerCase()}.`;
-  const rawBody = desc || fallback;
+
+  let rawBody: string;
+  if (desc) {
+    rawBody = desc;
+  } else {
+    // Structured synthesized sales narrative fallback
+    const area = [l.suburb, l.postcode_district].filter(Boolean).join(', ');
+    const isSale = l.service_type === 'sale';
+    const actionWord = isSale ? 'Buy' : 'Rent';
+    const typeWord = l.bedrooms === 0 ? 'Studio' : l.bedrooms != null ? `${l.bedrooms}-bed property` : 'property';
+    const hook = `${actionWord} this ${typeWord}${area ? ` in ${area}` : ''}`;
+
+    const highlights: string[] = [];
+    if (l.features && l.features.length > 0) {
+      highlights.push(l.features.slice(0, 3).join(', '));
+    }
+    if (l.furnishing) {
+      highlights.push(l.furnishing.replace(/_/g, ' '));
+    }
+    const specs = specGroups(l).join(' · ');
+    if (specs) {
+      highlights.push(specs);
+    }
+    highlights.push(statusLabel(l).toLowerCase());
+
+    const highlightsText = highlights.length > 0 ? ` Features include ${highlights.join('; ')}.` : '';
+    rawBody = `${hook}.${highlightsText}`;
+  }
+
   const bodyText = /[.!?…]$/.test(rawBody) ? rawBody : `${rawBody}.`;
 
   const maxBodyLen = Math.max(0, DESCRIPTION_MAX - suffix.length);

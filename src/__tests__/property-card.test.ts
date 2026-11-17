@@ -138,19 +138,19 @@ describe('buildPropertyDescriptionWithCta', () => {
     expect(text).not.toContain('07700');
     expect(text).not.toContain('https://agent.example');
     expect(text).toContain('And all this is only £500 pcm.');
-    expect(text.endsWith('Just send a message to RentLondonFlat.com Ltd to arrange a viewing!')).toBe(
+    expect(text.endsWith('Contact RentLondonFlat.com Ltd via Personal AI Agent below.')).toBe(
       true
     );
   });
 
   it('falls back to the listing agent when no vendor name is known', () => {
     expect(buildPropertyDescriptionWithCta(base)).toContain(
-      'Just send a message to the listing agent to arrange a viewing!'
+      'Contact the listing agent via Personal AI Agent below.'
     );
     expect(buildPropertyDescriptionWithCta(base, '  ')).toContain('the listing agent');
   });
 
-  it('summarises instead of dumping raw spec fields when there is no description', () => {
+  it('summarises with structured sales narrative when there is no description', () => {
     const text = buildPropertyDescriptionWithCta(
       listing({
         headline: 'Modern flat in Camden',
@@ -163,10 +163,10 @@ describe('buildPropertyDescriptionWithCta', () => {
       }),
       'Acme Lettings'
     );
-    expect(text).toContain('Modern flat in Camden in Camden');
+    expect(text).toContain('Rent this 2-bed property in Camden.');
     expect(text).toContain('vacant · available now');
     expect(text).toContain('£500 pcm');
-    expect(text).not.toContain('1 bathroom');
+    expect(text).toContain('Contact Acme Lettings via Personal AI Agent below.');
   });
 
   it('truncates long descriptions on a word boundary including price and CTA within cap', () => {
@@ -176,7 +176,7 @@ describe('buildPropertyDescriptionWithCta', () => {
     );
     expect(text.length).toBeLessThanOrEqual(480);
     expect(text).toContain('And all this is only £500 pcm.');
-    expect(text).toContain('Just send a message to Acme to arrange a viewing!');
+    expect(text).toContain('Contact Acme via Personal AI Agent below.');
   });
 
   it('includes the price sentence using priceLabel even when listing has no numeric price', () => {
@@ -185,7 +185,7 @@ describe('buildPropertyDescriptionWithCta', () => {
       'Acme'
     );
     expect(text).toContain('And all this is only Price on application.');
-    expect(text).toBe('A lovely studio. And all this is only Price on application. Just send a message to Acme to arrange a viewing!');
+    expect(text).toBe('A lovely studio. And all this is only Price on application. Contact Acme via Personal AI Agent below.');
   });
 });
 
