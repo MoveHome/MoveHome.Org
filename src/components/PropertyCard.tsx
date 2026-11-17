@@ -10,6 +10,8 @@ import { getEstateAgentProfile } from '@/lib/agent-directory';
 import { classifyGesture } from '@/lib/gesture';
 import DescriptionToggleButton from './DescriptionToggleButton';
 import EstateAgentCardModal from './EstateAgentCardModal';
+import CrmRefPill from './CrmRefPill';
+import { getCrmRef } from '@/lib/agent-routing';
 import {
   buildPropertyDescriptionWithCta,
   isVacant,
@@ -740,7 +742,8 @@ export default function PropertyCard({
             )}
 
             <Card title="Technical / AI Reference">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <CrmRefPill refId={listing.external_id ?? getCrmRef(listing)} />
                 <RefPill id={listing.raia_id} />
               </div>
             </Card>

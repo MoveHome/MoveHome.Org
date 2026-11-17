@@ -1,5 +1,6 @@
 export interface EstateAgentProfile {
   agent_id: string;
+  slug?: string;
   name: string;
   legal_name: string;
   registration_number: string;
@@ -18,6 +19,7 @@ export interface EstateAgentProfile {
 export const ESTATE_AGENT_PROFILES: Record<string, EstateAgentProfile> = {
   'org-gb-07798821': {
     agent_id: 'org-gb-07798821',
+    slug: 'rentlondonflat',
     name: 'RentLondonFlat.com Ltd',
     legal_name: 'RentLondonFlat.com Ltd',
     registration_number: '07798821',
@@ -38,6 +40,7 @@ export const ESTATE_AGENT_PROFILES: Record<string, EstateAgentProfile> = {
   },
   'org-th-0105561135324': {
     agent_id: 'org-th-0105561135324',
+    slug: 'beyond360',
     name: 'Beyond 360 Co., Ltd.',
     legal_name: 'Beyond 360 Co., Ltd.',
     registration_number: '0105561135324',
@@ -59,9 +62,13 @@ export const ESTATE_AGENT_PROFILES: Record<string, EstateAgentProfile> = {
 
 export const DEFAULT_ESTATE_AGENT_PROFILE: EstateAgentProfile = ESTATE_AGENT_PROFILES['org-gb-07798821'];
 
-export function getEstateAgentProfile(agentId: string | null | undefined): EstateAgentProfile | null {
-  if (agentId && ESTATE_AGENT_PROFILES[agentId]) {
-    return ESTATE_AGENT_PROFILES[agentId];
+export function getEstateAgentProfile(agentIdOrSlug: string | null | undefined): EstateAgentProfile | null {
+  if (!agentIdOrSlug) return null;
+  if (ESTATE_AGENT_PROFILES[agentIdOrSlug]) {
+    return ESTATE_AGENT_PROFILES[agentIdOrSlug];
   }
-  return null;
+  const match = Object.values(ESTATE_AGENT_PROFILES).find(
+    (p) => p.slug === agentIdOrSlug || p.agent_id === agentIdOrSlug
+  );
+  return match ?? null;
 }
