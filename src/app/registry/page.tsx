@@ -1,6 +1,7 @@
 // Public directory of real-estate A2A agents. Server component; reads filters from
 // the query string and renders a filterable grid. All agent text is rendered as JSX
 // text (React-escaped); no dangerouslySetInnerHTML anywhere.
+// FEAT(movehome): /registry org-only directory with logos & team section.
 
 import Link from 'next/link';
 import { listAgents, getStats } from '@/lib/registry/store';
