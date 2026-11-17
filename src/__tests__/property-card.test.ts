@@ -5,6 +5,7 @@ import {
   catalogCities,
   cityOf,
   countryOf,
+  feedOf,
   isVacant,
   isYouTubeUrl,
   locationsOf,
@@ -118,6 +119,40 @@ describe('property-card helpers', () => {
       500_000
     );
     expect(priceGbp(listing({ rent_pcm: 33_600, currency: 'MYR' }))).toBe(6000);
+  });
+});
+
+describe('feedOf — Buy | Rent | Stay', () => {
+  it('routes sale spellings to Buy', () => {
+    for (const service_type of ['sale', 'sales', 'buy']) {
+      expect(feedOf(listing({ service_type: service_type as never }))).toBe('sales');
+    }
+  });
+
+  it('routes long-let spellings to Rent', () => {
+    for (const service_type of ['long_term', 'lettings', 'rent', 'rental']) {
+      expect(feedOf(listing({ service_type: service_type as never }))).toBe('rentals');
+    }
+  });
+
+  it('routes short-let spellings to Stay, not Rent', () => {
+    for (const service_type of ['short_term', 'short_let', 'stay', 'holiday_let']) {
+      expect(feedOf(listing({ service_type: service_type as never }))).toBe('stay');
+    }
+  });
+
+  it('checks service_type before the portal LETTINGS transaction_type', () => {
+    // Upstream short lets are both service_type short_term and LETTINGS.
+    expect(
+      feedOf(listing({ service_type: 'short_term', transaction_type: 'LETTINGS' } as never))
+    ).toBe('stay');
+    expect(feedOf(listing({ service_type: 'sale', transaction_type: 'LETTINGS' } as never))).toBe(
+      'rentals'
+    );
+  });
+
+  it('returns null when nothing matches a feed', () => {
+    expect(feedOf(listing({ service_type: 'nonsense' as never }))).toBeNull();
   });
 });
 
