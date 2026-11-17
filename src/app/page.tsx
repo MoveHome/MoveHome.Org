@@ -198,7 +198,9 @@ export default function HomePage() {
             <a href="https://estateaigents.com" target="_blank" rel="noopener noreferrer" className="hover:text-[var(--accent)] transition-colors">.com</a>
             <a href="https://estateaigents.org" target="_blank" rel="noopener noreferrer" className="hover:text-[var(--accent)] transition-colors">.org</a>
             <a href="https://github.com/MoveHome/MoveHome.Org" target="_blank" rel="noopener noreferrer" className="hover:text-[var(--accent)] transition-colors">GitHub</a>
-            <a href="https://estateaigents.org/charter.html" target="_blank" rel="noopener noreferrer" className="hover:text-[var(--accent)] transition-colors">Charter</a>
+            <a href="/charter" className="hover:text-[var(--accent)] transition-colors">Charter</a>
+            <a href="/terms" className="hover:text-[var(--accent)] transition-colors">Terms</a>
+            <a href="/privacy" className="hover:text-[var(--accent)] transition-colors">Privacy</a>
           </div>
         </div>
       </footer>
