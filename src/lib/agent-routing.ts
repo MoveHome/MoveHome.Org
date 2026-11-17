@@ -1,6 +1,5 @@
 import type { Listing } from './types';
 import { getEstateAgentProfile, type EstateAgentProfile } from './agent-directory';
-import { getAgent as getRegistryAgent } from './registry/store';
 
 export const RESERVED_SLUGS = new Set([
   'search',
@@ -97,30 +96,33 @@ export async function getAgentBySlug(slug: string): Promise<EstateAgentProfile |
   const localProfile = getEstateAgentProfile(slug);
   if (localProfile) return localProfile;
 
-  // 2. Registry lookup
-  try {
-    const regAgent = await getRegistryAgent(slug);
-    if (regAgent) {
-      return {
-        agent_id: regAgent.id || slug,
-        slug: regAgent.slug,
-        name: regAgent.name || regAgent.slug,
-        legal_name: regAgent.provider_org || regAgent.name || regAgent.slug,
-        registration_number: 'A2A-REG',
-        registration_authority: 'RAIA A2A Protocol Registry',
-        incorporation_info: 'Verified A2A Protocol Agent',
-        jurisdiction: (regAgent.locations && regAgent.locations[0]) || 'Global',
-        business_address: regAgent.provider_url || 'A2A Network',
-        email: 'agent@estateaigents.com',
-        website: regAgent.provider_url || regAgent.a2a_url || 'https://movehome.org',
-        licences: ['RAIA Protocol Listed Agent'],
-        agent_card_url: regAgent.well_known_uri || regAgent.a2a_url || 'https://app.estateaigents.com/.well-known/agent.json',
-        logo_url: regAgent.icon_url || null,
-        verified: true
-      };
+  // 2. Registry lookup (server-only dynamic import to keep client bundle clean of Node builtins)
+  if (typeof window === 'undefined') {
+    try {
+      const { getAgent: getRegistryAgent } = await import('./registry/store');
+      const regAgent = await getRegistryAgent(slug);
+      if (regAgent) {
+        return {
+          agent_id: regAgent.id || slug,
+          slug: regAgent.slug,
+          name: regAgent.name || regAgent.slug,
+          legal_name: regAgent.provider_org || regAgent.name || regAgent.slug,
+          registration_number: 'A2A-REG',
+          registration_authority: 'RAIA A2A Protocol Registry',
+          incorporation_info: 'Verified A2A Protocol Agent',
+          jurisdiction: (regAgent.locations && regAgent.locations[0]) || 'Global',
+          business_address: regAgent.provider_url || 'A2A Network',
+          email: 'agent@estateaigents.com',
+          website: regAgent.provider_url || regAgent.a2a_url || 'https://movehome.org',
+          licences: ['RAIA Protocol Listed Agent'],
+          agent_card_url: regAgent.well_known_uri || regAgent.a2a_url || 'https://app.estateaigents.com/.well-known/agent.json',
+          logo_url: regAgent.icon_url || null,
+          verified: true
+        };
+      }
+    } catch {
+      // Registry query failed or unconfigured DB
     }
-  } catch {
-    // Registry query failed or unconfigured DB
   }
 
   return null;
