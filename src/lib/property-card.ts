@@ -345,6 +345,71 @@ export function youtubeIdOf(url: string | null | undefined): string | null {
 // A YouTube link in <video src> fails silently, so it gets a player instead.
 export const isYouTubeUrl = (url: string | null | undefined): boolean => youtubeIdOf(url) !== null;
 
+// ── Sales | Rentals feeds ──────────────────────────────────────────────────
+
+export type Feed = 'sales' | 'rentals';
+
+const SALES_TYPES = ['sale', 'sales', 'buy'];
+// short_term is this codebase's name for a short let.
+const RENTAL_TYPES = ['long_term', 'short_term', 'short_let', 'lettings', 'rent'];
+
+// Portal rows carry transaction_type (SALES/LETTINGS), feed rows service_type;
+// they disagree on spelling, so both are normalised before matching. A listing
+// that matches neither belongs to no feed rather than to both.
+export function feedOf(l: Listing): Feed | null {
+  const tt = (l as Listing & { transaction_type?: string | null }).transaction_type;
+  const classify = (v?: string | null): Feed | null => {
+    const s = (v ?? '').toLowerCase();
+    if (SALES_TYPES.includes(s)) return 'sales';
+    if (RENTAL_TYPES.includes(s)) return 'rentals';
+    return null;
+  };
+  return classify(tt) ?? classify(l.service_type);
+}
+
+// ── Media slide ordering ───────────────────────────────────────────────────
+
+export type MediaSlide = {
+  kind: 'photo' | 'video' | 'tour360' | 'youtube' | 'floorplan';
+  url: string;
+  // Static frame shown before the slide is opened (video/360/YouTube posters).
+  poster?: string;
+};
+
+// hero photo → top photos → video/360 posters → remaining photos → floorplans last.
+// 360 and YouTube arrive as posters so the carousel keeps deck gestures.
+export function mediaSlidesOf(l: Listing): MediaSlide[] {
+  const photos: string[] = [];
+  const add = (u: string | null | undefined) => {
+    if (u && u !== l.floor_plan_url && !photos.includes(u)) photos.push(u);
+  };
+  add(l.photo_url);
+  add(l.featured_image_url);
+  for (const p of [...(l.photos ?? [])].sort((a, b) => (a.order ?? 0) - (b.order ?? 0))) {
+    add(p.url);
+  }
+
+  const slides: MediaSlide[] = [];
+  const [hero, ...rest] = photos;
+  if (hero) slides.push({ kind: 'photo', url: hero });
+  for (const url of rest.slice(0, 2)) slides.push({ kind: 'photo', url });
+
+  const poster = rest[2] ?? hero;
+  if (l.video_url) {
+    const yt = youtubeIdOf(l.video_url);
+    slides.push({
+      kind: yt ? 'youtube' : 'video',
+      url: l.video_url,
+      poster: yt ? `https://i.ytimg.com/vi/${yt}/hqdefault.jpg` : poster
+    });
+  }
+  if (l.tour_360_url) slides.push({ kind: 'tour360', url: l.tour_360_url, poster });
+
+  for (const url of rest.slice(2)) slides.push({ kind: 'photo', url });
+  if (l.floor_plan_url) slides.push({ kind: 'floorplan', url: l.floor_plan_url });
+  return slides;
+}
+
 const DESCRIPTION_MAX = 480;
 
 const LOCAL_COPY: Record<AppLang, { pricePrefix: string; priceSuffix: string; cta: (vendor: string) => string }> = {

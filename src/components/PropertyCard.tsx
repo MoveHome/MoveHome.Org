@@ -13,6 +13,7 @@ import EstateAgentCardModal from './EstateAgentCardModal';
 import {
   buildPropertyDescriptionWithCta,
   isVacant,
+  mediaSlidesOf,
   priceLabel,
   specGroups,
   statusLabel,
@@ -21,7 +22,8 @@ import {
   viewingSlots,
   voiceMatchesGender,
   youtubeIdOf,
-  type AppLang
+  type AppLang,
+  type MediaSlide
 } from '@/lib/property-card';
 
 // ── Component ─────────────────────────────────────────────────────────────
@@ -40,27 +42,15 @@ interface Props {
   drawer: boolean;
   onDrawerChange: (open: boolean) => void;
   keysEnabled?: boolean;
+  // Lets the deck stand its own keys/swipes down while a viewer is open.
+  onViewerChange?: (open: boolean) => void;
   voiceGender?: 'female' | 'male';
   appLang?: AppLang;
   onFilterByAgent?: (agentId: string) => void;
 }
 
-type MediaItem = { kind: 'video' | 'photo'; url: string };
 type Narration = 'idle' | 'loading' | 'playing';
-
-function slidesOf(l: Listing): MediaItem[] {
-  const photos = (l.photos?.length
-    ? [...l.photos].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)).map((p) => p.url)
-    : [l.photo_url, l.featured_image_url]
-  ).filter((u): u is string => Boolean(u) && u !== l.floor_plan_url);
-  return [
-    // YouTube pages are not video files — they get their own player instead.
-    ...(l.video_url && !youtubeIdOf(l.video_url)
-      ? [{ kind: 'video' as const, url: l.video_url }]
-      : []),
-    ...photos.map((url) => ({ kind: 'photo' as const, url }))
-  ];
-}
+type Viewer = { kind: 'tour360' | 'youtube'; url: string };
 
 // 1-sample silent WAV: playing it inside the click unlocks the same Audio
 // element for iOS Safari, which rejects a later play() outside the gesture.
@@ -90,19 +80,24 @@ export default function PropertyCard({
   drawer,
   onDrawerChange,
   keysEnabled = true,
+  onViewerChange,
   voiceGender = 'female',
   appLang = 'en',
   onFilterByAgent
 }: Props) {
-  const slides = useMemo(() => slidesOf(listing), [listing]);
+  const slides = useMemo(() => mediaSlidesOf(listing), [listing]);
   const [activeSlideIndex, setActiveSlideIndex] = useState(0);
   const setMediaSlideIndex = setActiveSlideIndex;
   const slide = activeSlideIndex;
   const [narration, setNarration] = useState<Narration>('idle');
   const [sheet, setSheet] = useState(false);
   const [agentModalOpen, setAgentModalOpen] = useState(false);
-  const [giraffeModalOpen, setGiraffeModalOpen] = useState(false);
-  const [youtubeOpen, setYoutubeOpen] = useState(false);
+  const [viewer, setViewer] = useState<Viewer | null>(null);
+
+  function openViewer(next: Viewer | null) {
+    setViewer(next);
+    onViewerChange?.(next !== null);
+  }
 
   // Live pointer drag state
   const [dragOffset, setDragOffset] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
@@ -120,7 +115,6 @@ export default function PropertyCard({
   );
 
   const agentProfile = getEstateAgentProfile(listing.agent_id);
-  const youtubeId = youtubeIdOf(listing.video_url);
 
   useEffect(() => {
     const v = videoRef.current;
@@ -134,7 +128,7 @@ export default function PropertyCard({
 
   // Photo arrows only — property up/down live on the deck so they survive the card.
   useEffect(() => {
-    if (drawer || !keysEnabled || agentModalOpen || giraffeModalOpen || youtubeOpen) return;
+    if (drawer || !keysEnabled || agentModalOpen || viewer) return;
     function onKey(e: KeyboardEvent) {
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA') return;
@@ -148,7 +142,17 @@ export default function PropertyCard({
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [drawer, keysEnabled, slides.length, agentModalOpen, giraffeModalOpen, youtubeOpen]);
+  }, [drawer, keysEnabled, slides.length, agentModalOpen, viewer]);
+
+  // Escape is the keyboard exit from the immersive 360/YouTube viewer.
+  useEffect(() => {
+    if (!viewer) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') openViewer(null);
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [viewer]);
 
   // Nothing keeps talking after the card leaves: abort the fetch, kill the audio and drop browser voice.
   const stopNarration = useCallback(() => {
@@ -238,7 +242,7 @@ export default function PropertyCard({
   }
 
   // Pointer drag event handlers (active only when drawer/sheets are closed)
-  const canDrag = !drawer && !sheet && !agentModalOpen && !giraffeModalOpen && !youtubeOpen;
+  const canDrag = !drawer && !sheet && !agentModalOpen && !viewer;
 
   const handlePointerDown = (e: React.PointerEvent) => {
     if (!canDrag) return;
@@ -327,10 +331,16 @@ export default function PropertyCard({
 
     if (intent === 'tap') {
       setDragOffset({ x: 0, y: 0 });
-      // Edge tap: left half -> prev photo, right half -> next photo
       const rect = e.currentTarget.getBoundingClientRect();
-      const clickX = e.clientX - rect.left;
-      if (clickX < rect.width / 2) {
+      const ratio = (e.clientX - rect.left) / rect.width;
+      const s = slides[slide];
+      // A poster slide's middle opens its tour; its edges still page like any photo.
+      if ((s?.kind === 'tour360' || s?.kind === 'youtube') && ratio > 0.3 && ratio < 0.7) {
+        openViewer({ kind: s.kind, url: s.url });
+        return;
+      }
+      // Edge tap: left half -> prev photo, right half -> next photo
+      if (ratio < 0.5) {
         prev();
       } else {
         next();
@@ -393,7 +403,6 @@ export default function PropertyCard({
   const showSaveBadge = (isDragging && dragOffset.x > 35 && Math.abs(dragOffset.x) >= Math.abs(dragOffset.y)) || animatingExit === 'save';
 
   const vacant = isVacant(listing);
-  const isVideoMedia = slides[activeSlideIndex]?.kind === 'video';
 
   const location = [listing.building_number, listing.street_name, listing.suburb, listing.postcode_full]
     .filter(Boolean)
@@ -407,7 +416,7 @@ export default function PropertyCard({
   return (
     <article
       style={{ transform: cardTransform, transition: cardTransition }}
-      className={`relative h-full w-full select-none overflow-hidden rounded-[26px] bg-[#09090b] text-white shadow-2xl ${
+      className={`relative h-full w-full select-none overflow-hidden rounded-[26px] bg-[var(--bg-card)] text-[var(--text)] shadow-2xl ${
         showSaveBadge ? 'ring-4 ring-emerald-500/80 shadow-emerald-500/20' : ''
       } ${showPassBadge ? 'ring-4 ring-rose-500/80 shadow-rose-500/20' : ''}`}
     >
@@ -434,30 +443,61 @@ export default function PropertyCard({
         {slides.length === 0 && (
           <div className="flex h-full items-center justify-center text-sm text-white/60">No media</div>
         )}
-        {slides.map((s, i) =>
-          s.kind === 'video' ? (
-            <video
-              key={s.url}
-              ref={videoRef}
-              src={s.url}
-              muted
-              autoPlay
-              loop
-              playsInline
-              className={`pointer-events-none absolute inset-0 h-full w-full object-cover ${
-                i === slide ? '' : 'hidden'
-              }`}
-            />
-          ) : (
+        {slides.map((s, i) => {
+          const hidden = i === slide ? '' : 'hidden';
+          if (s.kind === 'video') {
+            return (
+              <video
+                key={s.url}
+                ref={videoRef}
+                src={s.url}
+                poster={s.poster}
+                muted
+                autoPlay
+                loop
+                playsInline
+                className={`pointer-events-none absolute inset-0 h-full w-full object-cover ${hidden}`}
+              />
+            );
+          }
+          if (s.kind === 'tour360' || s.kind === 'youtube') {
+            // Poster only: the iframe is mounted after a tap, so a swipe never
+            // lands inside a live 360 viewer or a playing YouTube embed.
+            return (
+              <div
+                key={`${s.kind}-${s.url}`}
+                className={`absolute inset-0 h-full w-full ${hidden}`}
+                data-testid={s.kind === 'tour360' ? 'tour-360-slide' : 'youtube-slide'}
+              >
+                {s.poster && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={s.poster}
+                    alt=""
+                    className="absolute inset-0 h-full w-full object-cover"
+                  />
+                )}
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-black/25">
+                  <span className="rounded-full border border-white/40 bg-black/70 px-4 py-2 text-sm font-bold text-white shadow-lg backdrop-blur">
+                    {s.kind === 'tour360' ? '360°' : '▶ Video'}
+                  </span>
+                  <span className="rounded-full bg-black/60 px-2 py-0.5 text-[10px] font-semibold text-white/90">
+                    {s.kind === 'tour360' ? '360° Giraffe Tour' : 'YouTube Tour'} · tap to open
+                  </span>
+                </div>
+              </div>
+            );
+          }
+          return (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               key={`${s.url}-${i}`}
               src={s.url}
-              alt={`${titleOf(listing)} — photo ${i + 1}`}
-              className={`absolute inset-0 h-full w-full object-cover ${i === slide ? '' : 'hidden'}`}
+              alt={`${titleOf(listing)} — ${s.kind === 'floorplan' ? 'floorplan' : `photo ${i + 1}`}`}
+              className={`absolute inset-0 h-full w-full object-cover ${hidden}`}
             />
-          )
-        )}
+          );
+        })}
       </div>
 
       {/* Story pagination bars */}
@@ -482,20 +522,6 @@ export default function PropertyCard({
 
 
 
-      {/* YouTube tour opens in its own player */}
-      {youtubeId && (
-        <button
-          type="button"
-          data-testid="youtube-btn"
-          onClick={() => setYoutubeOpen(true)}
-          aria-label="Play YouTube video tour"
-          className="absolute right-3 top-7 z-20 inline-flex items-center gap-1.5 rounded-full border border-red-500/40 bg-red-950/90 px-3 py-1 text-[11px] font-bold text-white backdrop-blur"
-        >
-          <YouTubeIcon size={14} />
-          YouTube Tour
-        </button>
-      )}
-
       {/* ── HUD ──────────────────────────────────────────────────────── */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-20 bg-gradient-to-t from-black via-black/75 to-transparent px-4 pb-4 pt-28">
         <span className="inline-flex items-center gap-1.5 rounded-full bg-white px-3 py-1 text-[11px] font-bold text-zinc-950">
@@ -507,20 +533,9 @@ export default function PropertyCard({
         </div>
         <div className="mt-1 text-sm font-semibold text-zinc-200">{titleOf(listing)}</div>
 
-        {/* Giraffe 360 & Estate Agent HUD Pills */}
-        <div className="pointer-events-auto mt-2.5 flex flex-wrap items-center gap-2">
-          {listing.tour_360_url && (
-            <button
-              type="button"
-              data-testid="giraffe-360-btn"
-              onClick={() => setGiraffeModalOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-full border border-cyan-400/40 bg-cyan-950/80 px-3 py-1 text-[11px] font-bold text-cyan-300 backdrop-blur hover:bg-cyan-900/80 transition"
-            >
-              <span>🌐 360° Giraffe Tour</span>
-            </button>
-          )}
-
-          {agentProfile && (
+        {/* Estate Agent HUD Pill — 360 and video live in the carousel as posters */}
+        {agentProfile && (
+          <div className="pointer-events-auto mt-2.5 flex flex-wrap items-center gap-2">
             <button
               type="button"
               data-testid="estate-agent-pill"
@@ -528,8 +543,16 @@ export default function PropertyCard({
               className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-950/80 px-3.5 py-1.5 text-[11px] font-semibold text-emerald-300 backdrop-blur hover:bg-emerald-900/80 transition"
             >
               {(listing.agent_logo_url || agentProfile.logo_url) ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={listing.agent_logo_url || agentProfile.logo_url!} alt={agentProfile.name} className="h-4 w-auto object-contain max-w-[100px]" />
+                // Logos are usually dark on transparent; a light plate keeps them
+                // legible over the photo in both themes.
+                <span className="flex h-5 items-center rounded bg-white/90 px-1">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={listing.agent_logo_url || agentProfile.logo_url!}
+                    alt={agentProfile.name}
+                    className="h-4 w-auto object-contain max-w-[100px]"
+                  />
+                </span>
               ) : (
                 <span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-700 text-[9px] font-bold text-white">
                   {agentProfile.name.slice(0, 2).toUpperCase()}
@@ -537,8 +560,8 @@ export default function PropertyCard({
               )}
               <span>{agentProfile.name}</span>
             </button>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* 5 standard action circles */}
         <div className="pointer-events-auto mt-4 flex items-center justify-center gap-3">
@@ -581,13 +604,13 @@ export default function PropertyCard({
 
       {/* ── State 2: expanded description drawer ─────────────────────── */}
       {drawer && (
-        <div className="absolute inset-0 z-30 flex flex-col overflow-y-auto bg-neutral-950 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-          <header className="sticky top-0 z-10 flex items-start justify-between gap-3 bg-neutral-950/95 px-4 py-3 backdrop-blur">
+        <div className="absolute inset-0 z-30 flex flex-col overflow-y-auto bg-[var(--bg)] text-[var(--text)] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <header className="sticky top-0 z-10 flex items-start justify-between gap-3 bg-[var(--bg)]/95 px-4 py-3 backdrop-blur">
             <div className="min-w-0">
               <p className="truncate text-sm font-bold">
                 {priceLabel(listing)} · {titleOf(listing)}
               </p>
-              <p className="truncate text-[11px] text-white/50">{areaOf(listing)}</p>
+              <p className="truncate text-[11px] text-[var(--text-dim)]">{areaOf(listing)}</p>
               <div className="mt-1.5 flex flex-wrap gap-2 items-center">
                 <RefPill id={listing.raia_id} />
               </div>
@@ -632,7 +655,7 @@ export default function PropertyCard({
                   <button
                     type="button"
                     data-testid="giraffe-360-btn"
-                    onClick={() => setGiraffeModalOpen(true)}
+                    onClick={() => openViewer({ kind: 'tour360', url: listing.tour_360_url! })}
                     className="inline-flex items-center gap-1.5 rounded-full border border-cyan-400/40 bg-cyan-950/80 px-3 py-1 text-[11px] font-bold text-cyan-300 hover:bg-cyan-900/80 transition"
                   >
                     🌐 360° Giraffe Tour
@@ -656,13 +679,13 @@ export default function PropertyCard({
             </Card>
 
             <Card title="About this property">
-              <p className="text-xs leading-relaxed text-white/70">
+              <p className="text-xs leading-relaxed text-[var(--text-dim)]">
                 {buildPropertyDescriptionWithCta(listing, agentProfile?.name, appLang)}
               </p>
             </Card>
 
             <Card title="Location &amp; Google Maps">
-              <p className="text-xs leading-relaxed text-white/70">
+              <p className="text-xs leading-relaxed text-[var(--text-dim)]">
                 {[titleOf(listing), areaOf(listing), listing.postcode_full].filter(Boolean).join(' · ')}
               </p>
               <a
@@ -727,93 +750,54 @@ export default function PropertyCard({
         onFilterByAgent={onFilterByAgent}
       />
 
-      {/* Giraffe 360 Fullscreen Tour Modal */}
-      {giraffeModalOpen && listing.tour_360_url && (
+      {/* ── Immersive 360 / YouTube viewer ───────────────────────────── */}
+      {viewer && (
         <div
           className="fixed inset-0 z-50 flex flex-col bg-black p-2 md:p-4"
-          onClick={() => setGiraffeModalOpen(false)}
-        >
-          <div
-            className="relative flex flex-col h-full w-full rounded-2xl overflow-hidden border border-zinc-800 bg-zinc-950"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between border-b border-zinc-800 bg-zinc-900/90 px-4 py-3">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-bold text-cyan-300">🌐 360° Giraffe Virtual Tour</span>
-                <span className="text-xs text-zinc-400 truncate max-w-xs">{titleOf(listing)}</span>
-              </div>
-              <div className="flex items-center gap-3">
-                <a
-                  href={listing.tour_360_url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs font-semibold text-cyan-400 hover:underline"
-                >
-                  Open in New Tab ↗
-                </a>
-                <button
-                  type="button"
-                  onClick={() => setGiraffeModalOpen(false)}
-                  className="rounded-full p-1 text-zinc-400 hover:text-white"
-                  aria-label="Close virtual tour"
-                >
-                  ✕
-                </button>
-              </div>
-            </div>
-            <div className="flex-1 w-full h-full bg-black">
-              <iframe
-                src={listing.tour_360_url}
-                title="Giraffe 360 Virtual Tour"
-                className="h-full w-full border-0"
-                allow="fullscreen; xr-spatial-tracking; gyroscope; accelerometer"
-              />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* YouTube Tour Modal */}
-      {youtubeOpen && youtubeId && (
-        <div
-          className="fixed inset-0 z-50 flex flex-col bg-black p-2 md:p-4"
-          onClick={() => setYoutubeOpen(false)}
+          onClick={() => openViewer(null)}
         >
           <div
             className="relative flex h-full w-full flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between border-b border-zinc-800 bg-zinc-900/90 px-4 py-3">
+            <div className="flex items-center justify-between gap-3 border-b border-zinc-800 bg-zinc-900/90 px-4 py-3">
               <div className="flex min-w-0 items-center gap-2">
-                <YouTubeIcon size={16} />
-                <span className="text-sm font-bold text-white">YouTube Tour</span>
+                <span className="shrink-0 text-sm font-bold text-cyan-300">
+                  {viewer.kind === 'tour360' ? '360° Giraffe Virtual Tour' : 'YouTube Tour'}
+                </span>
                 <span className="truncate text-xs text-zinc-400">{titleOf(listing)}</span>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex shrink-0 items-center gap-3">
                 <a
-                  href={`https://www.youtube.com/watch?v=${youtubeId}`}
+                  href={viewer.kind === 'youtube' ? `https://www.youtube.com/watch?v=${youtubeIdOf(viewer.url)}` : viewer.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-xs font-semibold text-red-400 hover:underline"
+                  className="text-xs font-semibold text-cyan-400 hover:underline"
                 >
-                  Open in YouTube ↗
+                  Open in new tab ↗
                 </a>
                 <button
                   type="button"
-                  onClick={() => setYoutubeOpen(false)}
-                  className="rounded-full p-1 text-zinc-400 hover:text-white"
-                  aria-label="Close YouTube tour"
+                  data-testid="viewer-done"
+                  onClick={() => openViewer(null)}
+                  className="rounded-full bg-white px-4 py-1.5 text-xs font-bold text-black"
                 >
-                  ✕
+                  Done
                 </button>
               </div>
             </div>
             <div className="h-full w-full flex-1 bg-black">
+              {/* touch-action none: the deck must not steal the 360 drag. */}
               <iframe
-                src={`https://www.youtube.com/embed/${youtubeId}?autoplay=1&rel=0`}
-                title="YouTube property tour"
+                src={
+                  viewer.kind === 'youtube'
+                    ? `https://www.youtube.com/embed/${youtubeIdOf(viewer.url)}?autoplay=1&rel=0`
+                    : viewer.url
+                }
+                title={viewer.kind === 'tour360' ? 'Giraffe 360 virtual tour' : 'YouTube property tour'}
                 className="h-full w-full border-0"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                style={{ touchAction: 'none' }}
+                allow="fullscreen; accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share; xr-spatial-tracking"
                 allowFullScreen
               />
             </div>
@@ -828,8 +812,8 @@ export default function PropertyCard({
 
 function Card({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-neutral-900/80 p-3 backdrop-blur">
-      <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-white/40">
+    <div className="rounded-2xl border border-[var(--border)] bg-[var(--bg-card)] p-3">
+      <h2 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-[var(--text-faint)]">
         {title}
       </h2>
       {children}
@@ -839,7 +823,7 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
 
 function Chip({ children }: { children: React.ReactNode }) {
   return (
-    <span className="rounded-full border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-semibold text-white/80">
+    <span className="rounded-full border border-[var(--border)] bg-[var(--bg-elev)] px-2.5 py-1 text-[11px] font-semibold text-[var(--text-dim)]">
       {children}
     </span>
   );
@@ -911,14 +895,6 @@ function HeartIcon({ filled }: { filled: boolean }) {
       strokeWidth="2.5"
     >
       <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
-    </svg>
-  );
-}
-
-function YouTubeIcon({ size }: { size: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="#ef4444" aria-hidden="true">
-      <path d="M23 12s0-3.3-.42-4.88a2.53 2.53 0 0 0-1.78-1.79C19.22 4.9 12 4.9 12 4.9s-7.22 0-8.8.43A2.53 2.53 0 0 0 1.42 7.1C1 8.7 1 12 1 12s0 3.3.42 4.88a2.53 2.53 0 0 0 1.78 1.79c1.58.43 8.8.43 8.8.43s7.22 0 8.8-.43a2.53 2.53 0 0 0 1.78-1.79C23 15.3 23 12 23 12ZM9.75 15.27V8.73L15.5 12l-5.75 3.27Z" />
     </svg>
   );
 }
@@ -1002,18 +978,18 @@ function ViewingSheet({
       onClick={onClose}
     >
       <div
-        className="w-full rounded-t-3xl border-t border-white/20 bg-zinc-950 p-5 shadow-2xl space-y-4 max-h-[85vh] overflow-y-auto"
+        className="w-full rounded-t-3xl border-t border-[var(--border-bright)] bg-[var(--bg-card)] p-5 shadow-2xl space-y-4 max-h-[85vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
+        <div className="flex items-center justify-between border-b border-[var(--border)] pb-3">
           <div>
-            <h3 className="text-sm font-bold text-white">Book a viewing</h3>
-            <p className="text-xs text-zinc-400">{titleOf(listing)}</p>
+            <h3 className="text-sm font-bold text-[var(--text)]">Book a viewing</h3>
+            <p className="text-xs text-[var(--text-dim)]">{titleOf(listing)}</p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-full p-1 text-zinc-400 hover:text-white"
+            className="rounded-full p-1 text-[var(--text-dim)] hover:text-[var(--text)]"
           >
             ✕
           </button>
@@ -1023,7 +999,7 @@ function ViewingSheet({
           <div className="py-6 text-center space-y-2">
             <span className="text-3xl">✅</span>
             <h4 className="text-sm font-bold text-emerald-400">Viewing Request Sent!</h4>
-            <p className="text-xs text-zinc-300">
+            <p className="text-xs text-[var(--text-dim)]">
               The agent for {titleOf(listing)} has received your request and will confirm shortly.
             </p>
             <button
@@ -1039,7 +1015,7 @@ function ViewingSheet({
             {error && <div className="rounded-lg bg-red-500/10 border border-red-500/20 p-2 text-red-400">{error}</div>}
 
             <div className="space-y-2">
-              <label className="block font-semibold text-zinc-300">Select a Slot</label>
+              <label className="block font-semibold text-[var(--text-dim)]">Select a Slot</label>
               <div className="grid grid-cols-1 gap-2 max-h-36 overflow-y-auto">
                 {slots.map((slot) => {
                   const isSelected = selectedSlot?.iso === slot.iso;
@@ -1051,7 +1027,7 @@ function ViewingSheet({
                       className={`flex items-center justify-between rounded-xl border p-2.5 transition ${
                         isSelected
                           ? 'border-emerald-500 bg-emerald-950/40 text-emerald-300'
-                          : 'border-zinc-800 bg-zinc-900 text-zinc-300 hover:border-zinc-700'
+                          : 'border-[var(--border)] bg-[var(--bg-elev)] text-[var(--text-dim)] hover:border-[var(--border-bright)]'
                       }`}
                     >
                       <span>📅 {slot.label}</span>
@@ -1065,14 +1041,14 @@ function ViewingSheet({
             </div>
 
             <div className="space-y-2">
-              <label className="block font-semibold text-zinc-300">Your Details</label>
+              <label className="block font-semibold text-[var(--text-dim)]">Your Details</label>
               <input
                 type="text"
                 placeholder="Full Name *"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 required
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-white focus:border-emerald-500 focus:outline-none"
+                className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-elev)] px-3 py-2 text-[var(--text)] focus:border-emerald-500 focus:outline-none"
               />
               <input
                 type="email"
@@ -1080,14 +1056,14 @@ function ViewingSheet({
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-white focus:border-emerald-500 focus:outline-none"
+                className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-elev)] px-3 py-2 text-[var(--text)] focus:border-emerald-500 focus:outline-none"
               />
               <input
                 type="tel"
                 placeholder="Phone Number (optional)"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
-                className="w-full rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-white focus:border-emerald-500 focus:outline-none"
+                className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-elev)] px-3 py-2 text-[var(--text)] focus:border-emerald-500 focus:outline-none"
               />
             </div>
 
