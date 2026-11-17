@@ -78,10 +78,10 @@ export function generateListingSlug(listing: Listing): string {
 
 export function parseListingSlugRef(listingSlug: string): { isRawRef: boolean; ref: string } {
   const trimmed = listingSlug.trim();
-  if (/^[a-z0-9_]+$/i.test(trimmed) && !trimmed.includes('-')) {
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) {
     return { isRawRef: true, ref: trimmed };
   }
-  if (/^\d+$/.test(trimmed)) {
+  if (/^[a-z0-9_]+$/i.test(trimmed)) {
     return { isRawRef: true, ref: trimmed };
   }
   const parts = trimmed.split('-');

@@ -276,6 +276,14 @@ describe('Agent Vanity Routing & Hybrid SEO Slugs', () => {
       expect(raw.isRawRef).toBe(true);
       expect(raw.ref).toBe('10492');
 
+      const uuidRef = parseListingSlugRef('64cd576e-6cf8-47cc-a7d5-00d4d3da401b');
+      expect(uuidRef.isRawRef).toBe(true);
+      expect(uuidRef.ref).toBe('64cd576e-6cf8-47cc-a7d5-00d4d3da401b');
+
+      const crmRefWithUnderscore = parseListingSlugRef('crm_ref_123');
+      expect(crmRefWithUnderscore.isRawRef).toBe(true);
+      expect(crmRefWithUnderscore.ref).toBe('crm_ref_123');
+
       const hybrid = parseListingSlugRef('fitzrovia-2-bed-charlotte-street-10492');
       expect(hybrid.isRawRef).toBe(false);
       expect(hybrid.ref).toBe('10492');
