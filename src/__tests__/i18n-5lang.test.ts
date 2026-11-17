@@ -143,27 +143,27 @@ describe('i18n & 5-Language Translation', () => {
       const en = buildPropertyDescriptionWithCta(dummyListing, 'Acme Realty', 'en');
       expect(en).toContain('A beautiful luxury apartment');
       expect(en).toContain('And all this is only £2,500 pcm.');
-      expect(en).toContain('Just send a message to Acme Realty to arrange a viewing!');
+      expect(en).toContain('Contact Acme Realty via Personal AI Agent below.');
 
       const th = buildPropertyDescriptionWithCta(dummyListing, 'Acme Realty', 'th');
       expect(th).toContain('อพาร์ทเมนท์หรูหราสวยงามตั้งอยู่ใจกลางลอนดอน');
       expect(th).toContain('และทั้งหมดนี้ในราคาเพียง £2,500 pcm');
-      expect(th).toContain('เพียงส่งข้อความถึง Acme Realty เพื่อนัดหมายเข้าชม!');
+      expect(th).toContain('ติดต่อ Acme Realty ผ่าน Personal AI Agent ด้านล่าง');
 
       const ja = buildPropertyDescriptionWithCta(dummyListing, 'Acme Realty', 'ja');
       expect(ja).toContain('ロンドン中心部に位置する美しい高級アパートメント');
       expect(ja).toContain('これらすべてがわずか £2,500 pcmです。');
-      expect(ja).toContain('内覧のご予約は Acme Realty にメッセージを送信してください！');
+      expect(ja).toContain('以下の Personal AI Agent 経由で Acme Realty に連絡してください。');
 
       const ms = buildPropertyDescriptionWithCta(dummyListing, 'Acme Realty', 'ms');
       expect(ms).toContain('Pangsapuri mewah yang indah terletak di pusat London');
       expect(ms).toContain('Dan semua ini hanya £2,500 pcm.');
-      expect(ms).toContain('Hanya hantar mesej kepada Acme Realty untuk mengatur janji temu melihat rumah!');
+      expect(ms).toContain('Hubungi Acme Realty melalui Personal AI Agent di bawah.');
 
       const zh = buildPropertyDescriptionWithCta(dummyListing, 'Acme Realty', 'zh');
       expect(zh).toContain('位于伦敦市中心的美丽豪华公寓');
       expect(zh).toContain('所有这些仅需 £2,500 pcm。');
-      expect(zh).toContain('只需发送消息给 Acme Realty 即可预约看房！');
+      expect(zh).toContain('请通过下方 Personal AI Agent 联系 Acme Realty。');
     });
 
     it('falls back to English marketing_description when translation status is not ok', () => {

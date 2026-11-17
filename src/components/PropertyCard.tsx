@@ -23,6 +23,7 @@ import {
   voiceMatchesGender,
   youtubeIdOf,
   type AppLang,
+  type ContactChannel,
   type MediaSlide
 } from '@/lib/property-card';
 
@@ -46,6 +47,7 @@ interface Props {
   onViewerChange?: (open: boolean) => void;
   voiceGender?: 'female' | 'male';
   appLang?: AppLang;
+  contactChannel?: ContactChannel;
   onFilterByAgent?: (agentId: string) => void;
 }
 
@@ -83,6 +85,7 @@ export default function PropertyCard({
   onViewerChange,
   voiceGender = 'female',
   appLang = 'en',
+  contactChannel = 'Personal AI Agent',
   onFilterByAgent
 }: Props) {
   const slides = useMemo(() => mediaSlidesOf(listing), [listing]);
@@ -189,7 +192,7 @@ export default function PropertyCard({
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
     window.speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(
-      buildPropertyDescriptionWithCta(listing, agentProfile?.name, appLang)
+      buildPropertyDescriptionWithCta(listing, agentProfile?.name, appLang, contactChannel)
     );
     u.lang = locale;
     const voices = window.speechSynthesis
@@ -540,6 +543,8 @@ export default function PropertyCard({
               type="button"
               data-testid="estate-agent-pill"
               onClick={() => setAgentModalOpen(true)}
+              aria-label={agentProfile.name}
+              title={agentProfile.name}
               className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-950/80 px-3.5 py-1.5 text-[11px] font-semibold text-emerald-300 backdrop-blur hover:bg-emerald-900/80 transition"
             >
               {(listing.agent_logo_url || agentProfile.logo_url) ? (
@@ -554,11 +559,13 @@ export default function PropertyCard({
                   />
                 </span>
               ) : (
-                <span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-700 text-[9px] font-bold text-white">
-                  {agentProfile.name.slice(0, 2).toUpperCase()}
-                </span>
+                <>
+                  <span className="flex h-4 w-4 items-center justify-center rounded-full bg-emerald-700 text-[9px] font-bold text-white">
+                    {agentProfile.name.slice(0, 2).toUpperCase()}
+                  </span>
+                  <span>{agentProfile.name}</span>
+                </>
               )}
-              <span>{agentProfile.name}</span>
             </button>
           </div>
         )}
@@ -597,8 +604,8 @@ export default function PropertyCard({
         </div>
       </div>
 
-      {/* ↑ info button → drawer */}
-      <div className="absolute right-3 top-1/2 z-20 -translate-y-1/2">
+      {/* Details button → drawer (anchored at top-right below story bars) */}
+      <div className="absolute right-3 top-6 z-20">
         <DescriptionToggleButton open={false} onClick={() => onDrawerChange(true)} />
       </div>
 
@@ -610,10 +617,14 @@ export default function PropertyCard({
               <p className="truncate text-sm font-bold">
                 {priceLabel(listing)} · {titleOf(listing)}
               </p>
-              <p className="truncate text-[11px] text-[var(--text-dim)]">{areaOf(listing)}</p>
-              <div className="mt-1.5 flex flex-wrap gap-2 items-center">
-                <RefPill id={listing.raia_id} />
-              </div>
+              {(() => {
+                const titleStr = titleOf(listing);
+                const areaStr = areaOf(listing);
+                const showArea = !titleStr.toLowerCase().endsWith(`in ${areaStr.toLowerCase()}`);
+                return showArea ? (
+                  <p className="truncate text-[11px] text-[var(--text-dim)]">{areaStr}</p>
+                ) : null;
+              })()}
             </div>
             <DescriptionToggleButton open onClick={() => onDrawerChange(false)} />
           </header>
@@ -665,9 +676,6 @@ export default function PropertyCard({
             </Card>
 
             <Card title="Lease &amp; Availability">
-              <div className="mb-2">
-                <RefPill id={listing.raia_id} />
-              </div>
               <div className="flex flex-wrap gap-1.5">
                 <Chip>{listing.service_type.replace(/_/g, ' ')}</Chip>
                 <Chip>{statusLabel(listing)}</Chip>
@@ -680,7 +688,7 @@ export default function PropertyCard({
 
             <Card title="About this property">
               <p className="text-xs leading-relaxed text-[var(--text-dim)]">
-                {buildPropertyDescriptionWithCta(listing, agentProfile?.name, appLang)}
+                {buildPropertyDescriptionWithCta(listing, agentProfile?.name, appLang, contactChannel)}
               </p>
             </Card>
 
@@ -730,6 +738,12 @@ export default function PropertyCard({
                 ))}
               </Card>
             )}
+
+            <Card title="Technical / AI Reference">
+              <div className="flex items-center gap-2">
+                <RefPill id={listing.raia_id} />
+              </div>
+            </Card>
           </div>
         </div>
       )}
@@ -738,6 +752,7 @@ export default function PropertyCard({
       {sheet && (
         <ViewingSheet
           listing={listing}
+          contactChannel={contactChannel}
           onClose={() => setSheet(false)}
         />
       )}
@@ -919,12 +934,15 @@ function SpeakerIcon({ size, color }: { size: number; color: string }) {
 
 function ViewingSheet({
   listing,
+  contactChannel = 'Personal AI Agent',
   onClose
 }: {
   listing: Listing;
+  contactChannel?: ContactChannel;
   onClose: () => void;
 }) {
   const [selectedSlot, setSelectedSlot] = useState<{ iso: string; label: string } | null>(null);
+  const [channel, setChannel] = useState<ContactChannel>(contactChannel);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
@@ -949,10 +967,10 @@ function ViewingSheet({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           raia_id: listing.raia_id,
-          enquirer: { name, email, phone: phone || null, preferred_contact: 'email' },
+          enquirer: { name, email, phone: phone || null, preferred_contact: channel === 'WhatsApp' ? 'whatsapp' : channel === 'Telegram' ? 'phone' : 'email' },
           message: selectedSlot
-            ? `Requested viewing slot: ${selectedSlot.label}`
-            : 'Requested property viewing',
+            ? `Requested viewing slot via ${channel}: ${selectedSlot.label}`
+            : `Requested property viewing via ${channel}`,
           viewing_request: selectedSlot
             ? { preferred_dates: [selectedSlot.iso], party_size: 1 }
             : null
@@ -1037,6 +1055,26 @@ function ViewingSheet({
                     </button>
                   );
                 })}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <label className="block font-semibold text-[var(--text-dim)]">Preferred Contact Channel</label>
+              <div className="flex gap-1.5">
+                {(['Personal AI Agent', 'WhatsApp', 'Telegram'] as const).map((ch) => (
+                  <button
+                    key={ch}
+                    type="button"
+                    onClick={() => setChannel(ch)}
+                    className={`flex-1 rounded-xl border py-2 text-[11px] font-semibold transition ${
+                      channel === ch
+                        ? 'border-emerald-500 bg-emerald-500 text-emerald-950'
+                        : 'border-[var(--border)] bg-[var(--bg-elev)] text-[var(--text-dim)]'
+                    }`}
+                  >
+                    {ch}
+                  </button>
+                ))}
               </div>
             </div>
 
