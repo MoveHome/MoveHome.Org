@@ -1,8 +1,13 @@
 import { NextResponse } from 'next/server';
 import { clientSecretMatches, getClientRegistration, issueMcpToken, TokenIssueError } from '@/lib/mcp/oauth';
+import { issuePortalAccessToken } from '@/lib/portal/jwt';
+import { verifyClientSecret } from '@/lib/portal/secrets';
+import { portalTable, type PortalCredentialRow } from '@/lib/portal/db';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+const ALLOWED_PORTAL_SCOPES = ['feed.read', 'feed.write', 'products.write'] as const;
 
 export async function POST(req: Request) {
   let grantType: string | null = null;
@@ -60,6 +65,80 @@ export async function POST(req: Request) {
     );
   }
 
+  // Portal Feed credentials (pcid_*)
+  if (clientId.startsWith('pcid_')) {
+    let cred: PortalCredentialRow | null = null;
+    try {
+      const { data } = await portalTable('tbl_portal_credentials')
+        .select('*')
+        .eq('client_id', clientId)
+        .maybeSingle();
+      cred = data as unknown as PortalCredentialRow | null;
+    } catch (e) {
+      console.error('[/oauth/token] portal credential lookup error:', e);
+      return NextResponse.json(
+        { error: 'server_error', error_description: 'Credential lookup failed.' },
+        { status: 500 }
+      );
+    }
+
+    const verified = cred && !cred.revoked_at ? verifyClientSecret(clientSecret, cred.secret_hash) : false;
+    if (!cred || cred.revoked_at || !verified) {
+      return NextResponse.json(
+        { error: 'invalid_client', error_description: 'Invalid client credentials.' },
+        { status: 401 }
+      );
+    }
+
+    const requestedList = (scope || cred.allowed_scopes.join(' ')).split(/\s+/).filter(Boolean);
+    const granted: string[] = [];
+    for (const s of requestedList) {
+      if ((ALLOWED_PORTAL_SCOPES as readonly string[]).includes(s) && cred.allowed_scopes.includes(s)) {
+        if (!granted.includes(s)) granted.push(s);
+      }
+    }
+
+    if (granted.length === 0) {
+      return NextResponse.json(
+        { error: 'invalid_scope', error_description: 'No requested scopes are permitted for this credential.' },
+        { status: 400 }
+      );
+    }
+
+    try {
+      const { token, expiresAt } = issuePortalAccessToken({
+        sub: cred.client_id,
+        scope: granted.join(' '),
+        agent_id: cred.agent_id,
+        branch_id: cred.default_branch_id ?? undefined,
+        expiresInSeconds: 3600
+      });
+
+      return NextResponse.json(
+        {
+          access_token: token,
+          token_type: 'Bearer',
+          expires_in: 3600,
+          scope: granted.join(' ')
+        },
+        {
+          status: 200,
+          headers: {
+            'Cache-Control': 'no-store',
+            Pragma: 'no-cache'
+          }
+        }
+      );
+    } catch (e) {
+      console.error('[/oauth/token] portal token issue error:', e);
+      return NextResponse.json(
+        { error: 'server_error', error_description: 'Failed to issue portal token.' },
+        { status: 500 }
+      );
+    }
+  }
+
+  // MCP Pilot credentials
   const reg = getClientRegistration(clientId);
   if (!reg || !clientSecretMatches(reg, clientSecret)) {
     return NextResponse.json(
@@ -69,7 +148,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const tokenInfo = await issueMcpToken(clientId, scope);
+    const tokenInfo = await issueMcpToken(clientId, scope ?? 'enquiry:write');
     return NextResponse.json(
       {
         access_token: tokenInfo.access_token,
@@ -90,7 +169,6 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'invalid_scope', error_description: e.message }, { status: 400 });
     }
     if (e instanceof TokenIssueError && e.code === 'server_error') {
-      // Fail closed: no signing key configured → no tokens at all.
       console.error('[/oauth/token] signing key not configured');
       return NextResponse.json(
         { error: 'temporarily_unavailable', error_description: 'Token issuance is not configured.' },
