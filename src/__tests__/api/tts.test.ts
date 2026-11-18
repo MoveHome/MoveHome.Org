@@ -143,6 +143,23 @@ describe('voice selection', () => {
     // Thai uses catalog Thai voices, not the English defaults.
     expect(voiceFor('th-TH', 'male')).toBe('xVv8qLTTnsYnrysc2Lx4');
     expect(voiceFor('th-TH', 'female')).toBe('brM9iIbwDREZaWL8luun');
+    // Mandarin has its own pair too.
+    expect(voiceFor('zh-CN', 'male')).toBe('g5CIjZEefAph4nQFvHAz');
+    expect(voiceFor('zh-CN', 'female')).toBe('LcfcDJNUP1GQjkzn1xUU');
+  });
+
+  it('lets a per-locale env override win over the built-in voice', () => {
+    process.env.ELEVENLABS_VOICE_ID_MALE = 'override-en-male';
+    process.env.ELEVENLABS_VOICE_ID_TH_FEMALE = 'override-th-female';
+    try {
+      expect(voiceFor('en-GB', 'male')).toBe('override-en-male');
+      expect(voiceFor('th-TH', 'female')).toBe('override-th-female');
+      // An override for one slot must not leak into the others.
+      expect(voiceFor('en-GB', 'female')).toBe('21m00Tcm4TlvDq8ikWAM');
+    } finally {
+      delete process.env.ELEVENLABS_VOICE_ID_MALE;
+      delete process.env.ELEVENLABS_VOICE_ID_TH_FEMALE;
+    }
   });
 
   it('derives the locale from the listing when omitted, matching the client resolver', () => {
@@ -177,7 +194,12 @@ describe('storage cache key', () => {
       buildPropertyDescriptionWithCta(listing({ marketing_description: 'Tiny studio.' }), 'Acme Estates')
     );
 
-    expect(new Set([a, repriced, revendored, redescribed]).size).toBe(4);
+    // The trailing CTA is part of the script: a changed contact channel re-voices it.
+    const rechanneled = scriptHash(
+      buildPropertyDescriptionWithCta(l, 'Acme Estates', 'en', 'WhatsApp')
+    );
+
+    expect(new Set([a, repriced, revendored, redescribed, rechanneled]).size).toBe(5);
     const base = cachePath(l.raia_id, 'en-GB', 'female', a);
     expect(base.startsWith(`tts/elevenlabs/${l.raia_id}/en-GB/female/`)).toBe(true);
     expect(base.endsWith('.mp3')).toBe(true);
