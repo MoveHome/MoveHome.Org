@@ -81,6 +81,12 @@ export function parseListingSlugRef(listingSlug: string): { isRawRef: boolean; r
   if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(trimmed)) {
     return { isRawRef: true, ref: trimmed };
   }
+  // Hybrid slugs may embed the full UUID after an SEO title prefix
+  // (e.g. "w1t-2-bed-flat-<uuid>"); splitting on "-" would truncate it.
+  const uuidMatch = trimmed.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+  if (uuidMatch) {
+    return { isRawRef: false, ref: uuidMatch[0] };
+  }
   if (/^[a-z0-9_]+$/i.test(trimmed)) {
     return { isRawRef: true, ref: trimmed };
   }
