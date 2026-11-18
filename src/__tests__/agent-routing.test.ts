@@ -288,6 +288,12 @@ describe('Agent Vanity Routing & Hybrid SEO Slugs', () => {
       expect(hybrid.isRawRef).toBe(false);
       expect(hybrid.ref).toBe('10492');
     });
+
+    it('extracts the full UUID from a hybrid slug with an embedded UUID', () => {
+      expect(
+        parseListingSlugRef('w1t-2-bed-flat-b8a4b76c-e122-4f7c-884e-03e0ccb507a3')
+      ).toEqual({ isRawRef: false, ref: 'b8a4b76c-e122-4f7c-884e-03e0ccb507a3' });
+    });
   });
 
   describe('308 Permanent Redirect for Raw CRM Refs', () => {
