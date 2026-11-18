@@ -99,7 +99,8 @@ const MENU_SECTIONS = [
   {
     title: 'MoveHome',
     links: [
-      ['https://movehome.org/', 'About'],
+      ['https://movehome.org/', 'Home (About)'],
+      ['https://movehome.org/registry', 'Agents'],
       ['https://movehome.org/charter', 'Charter'],
       ['https://movehome.org/terms', 'Terms'],
       ['https://movehome.org/privacy', 'Privacy']
@@ -407,11 +408,16 @@ export default function PropertyDeck({
     <div className="flex h-[100dvh] w-full flex-col bg-[var(--bg)] text-[var(--text)]">
       {/* Top bar */}
       <header className="relative z-30 shrink-0 border-b border-[var(--border)] bg-[var(--bg-elev)] px-3 pb-2 pt-3">
-        {/* Desktop nav (≥768px): Agents · Charter + feed + Filter */}
+        {/* Desktop nav (≥768px): hamburger + Home · Agents · Charter · Terms + feed + Filter */}
         <div className="mx-auto hidden md:flex w-full max-w-[680px] items-center justify-between gap-3">
-          <div className="flex items-center gap-4 text-sm font-semibold text-[var(--text-dim)]">
-            <a href="https://movehome.org/registry" className="hover:text-emerald-500 transition-colors">Agents</a>
-            <a href="https://movehome.org/charter" className="hover:text-emerald-500 transition-colors">Charter</a>
+          <div className="flex items-center gap-3">
+            <NavMenu open={menuOpen} onToggle={() => setMenuOpen((v) => !v)} />
+            <div className="flex items-center gap-4 text-sm font-semibold text-[var(--text-dim)]">
+              <a href="https://movehome.org/" className="hover:text-emerald-500 transition-colors">Home</a>
+              <a href="https://movehome.org/registry" className="hover:text-emerald-500 transition-colors">Agents</a>
+              <a href="https://movehome.org/charter" className="hover:text-emerald-500 transition-colors">Charter</a>
+              <a href="https://movehome.org/terms" className="hover:text-emerald-500 transition-colors">Terms</a>
+            </div>
           </div>
           <FeedTabs feed={feed} onChange={pickFeed} />
           <div className="flex items-center gap-2">
@@ -439,39 +445,7 @@ export default function PropertyDeck({
 
         {/* Mobile nav (<768px): hamburger + feed + filter */}
         <div className="mx-auto flex md:hidden w-full max-w-[420px] items-center justify-between gap-2 relative">
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setMenuOpen((v) => !v)}
-              aria-expanded={menuOpen}
-              aria-label="Menu"
-              className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text)] transition-colors hover:border-emerald-500"
-            >
-              <MenuIcon />
-            </button>
-
-            {menuOpen && (
-              <nav className="absolute left-0 top-12 z-40 w-[220px] overflow-hidden rounded-2xl border border-[var(--border-bright)] bg-[var(--bg-card)] py-2 shadow-2xl">
-                {MENU_SECTIONS.map((section, sIdx) => (
-                  <div key={section.title} className={sIdx > 0 ? 'mt-2 pt-2 border-t border-[var(--border)]' : ''}>
-                    <div className="px-4 py-1 text-[10px] font-bold uppercase tracking-wider text-[var(--text-faint)]">
-                      {section.title}
-                    </div>
-                    {section.links.map(([href, label]) => (
-                      <a
-                        key={href}
-                        href={href}
-                        onClick={() => setMenuOpen(false)}
-                        className="block px-4 py-1.5 text-xs font-medium text-[var(--text-dim)] transition-colors hover:bg-emerald-500/10 hover:text-emerald-500"
-                      >
-                        {label}
-                      </a>
-                    ))}
-                  </div>
-                ))}
-              </nav>
-            )}
-          </div>
+          <NavMenu open={menuOpen} onToggle={() => setMenuOpen((v) => !v)} />
 
           <FeedTabs feed={feed} onChange={pickFeed} />
 
@@ -933,6 +907,46 @@ function MenuIcon() {
       <line x1="4" y1="12" x2="14" y2="12" />
       <line x1="4" y1="17" x2="18" y2="17" />
     </svg>
+  );
+}
+
+// Hamburger + dropdown, rendered in both the mobile and desktop nav bars so
+// Home (About) / Terms / Privacy / Connect stay reachable at every width.
+function NavMenu({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-label="Menu"
+        className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[var(--border)] bg-[var(--bg-card)] text-[var(--text)] transition-colors hover:border-emerald-500"
+      >
+        <MenuIcon />
+      </button>
+
+      {open && (
+        <nav className="absolute left-0 top-12 z-40 w-[220px] overflow-hidden rounded-2xl border border-[var(--border-bright)] bg-[var(--bg-card)] py-2 shadow-2xl">
+          {MENU_SECTIONS.map((section, sIdx) => (
+            <div key={section.title} className={sIdx > 0 ? 'mt-2 pt-2 border-t border-[var(--border)]' : ''}>
+              <div className="px-4 py-1 text-[10px] font-bold uppercase tracking-wider text-[var(--text-faint)]">
+                {section.title}
+              </div>
+              {section.links.map(([href, label]) => (
+                <a
+                  key={href}
+                  href={href}
+                  onClick={onToggle}
+                  className="block px-4 py-1.5 text-xs font-medium text-[var(--text-dim)] transition-colors hover:bg-emerald-500/10 hover:text-emerald-500"
+                >
+                  {label}
+                </a>
+              ))}
+            </div>
+          ))}
+        </nav>
+      )}
+    </div>
   );
 }
 
