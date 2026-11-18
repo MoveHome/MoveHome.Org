@@ -1,0 +1,4 @@
+# Human approving seats of record for MoveHome main (Gate 8 A2, owner ruling 2026-11-18).
+# raia-one holds write but is NOT a code owner, so its approval cannot satisfy the
+# ruleset's code-owner review requirement.
+*  @ftteh @eugin-song
