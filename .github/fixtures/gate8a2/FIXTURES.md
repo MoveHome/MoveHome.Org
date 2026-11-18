@@ -19,3 +19,5 @@ the rule (the PR #122/#123 shape).
 
 Rollback restores `/root/.hermes/state/ruleset-27368324-pre-gate8a2.json` via `PUT`
 (`enforcement` stays `active`; never `disabled`).
+
+F2 fixture: this commit is H+1 — it must dismiss the approval given on H.
