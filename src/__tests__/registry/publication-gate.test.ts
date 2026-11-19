@@ -125,4 +125,16 @@ describe('registry listing hygiene', () => {
     const { agents } = await listAgents({ orgOnly: true, limit: 24, offset: 0 });
     expect(agents.map((a) => a.slug)).toEqual(['rentlondonflat-com-ltd']);
   });
+
+  it('dedupes organisation cards sharing provider_org or company identity', async () => {
+    const partner2 = {
+      ...partner,
+      id: '3',
+      slug: 'rentlondonflat-com-ltd-07798821',
+      well_known_uri: 'https://movehome.org/agent/org-gb-07798821/agent.json'
+    };
+    responses[VIEW] = { data: [partner, partner2], count: 2, error: null };
+    const { agents } = await listAgents({ orgOnly: true, limit: 24, offset: 0 });
+    expect(agents.map((a) => a.slug)).toEqual(['rentlondonflat-com-ltd']);
+  });
 });

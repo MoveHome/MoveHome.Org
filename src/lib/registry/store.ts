@@ -129,6 +129,14 @@ export async function listAgents(f: ListFilters): Promise<{ agents: PublicRegist
   let agents = ((data as PublicRegistryAgent[]) ?? []).map(a => ({ ...a, is_org: isOrganisationAgent(a) }));
   if (f.orgOnly) {
     agents = agents.filter((a) => a.is_org);
+    // Dedupe orgs by provider_org / company identity to prevent duplicate cards for the same agency (e.g. org-gb-rlf vs org-gb-07798821)
+    const seenOrgs = new Set<string>();
+    agents = agents.filter((a) => {
+      const orgKey = (a.provider_org || a.name || a.slug).toLowerCase().trim();
+      if (seenOrgs.has(orgKey)) return false;
+      seenOrgs.add(orgKey);
+      return true;
+    });
   }
   return { agents, total: f.orgOnly ? agents.length : (count ?? 0) };
 }
