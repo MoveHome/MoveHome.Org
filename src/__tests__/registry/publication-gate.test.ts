@@ -126,14 +126,16 @@ describe('registry listing hygiene', () => {
     expect(agents.map((a) => a.slug)).toEqual(['rentlondonflat-com-ltd']);
   });
 
-  it('dedupes organisation cards sharing provider_org or company identity', async () => {
+  it('dedupes organisation cards sharing provider_org, preferring the canonical slug', async () => {
     const partner2 = {
       ...partner,
       id: '3',
       slug: 'rentlondonflat-com-ltd-07798821',
-      well_known_uri: 'https://movehome.org/agent/org-gb-07798821/agent.json'
+      well_known_uri: 'https://movehome.org/agent/org-gb-07798821/agent.json',
+      // Live ordering is created_at DESC: the CH-suffixed duplicate is the newer row.
+      created_at: '2026-11-17T00:00:00Z'
     };
-    responses[VIEW] = { data: [partner, partner2], count: 2, error: null };
+    responses[VIEW] = { data: [partner2, partner], count: 2, error: null };
     const { agents } = await listAgents({ orgOnly: true, limit: 24, offset: 0 });
     expect(agents.map((a) => a.slug)).toEqual(['rentlondonflat-com-ltd']);
   });

@@ -129,14 +129,20 @@ export async function listAgents(f: ListFilters): Promise<{ agents: PublicRegist
   let agents = ((data as PublicRegistryAgent[]) ?? []).map(a => ({ ...a, is_org: isOrganisationAgent(a) }));
   if (f.orgOnly) {
     agents = agents.filter((a) => a.is_org);
-    // Dedupe orgs by provider_org / company identity to prevent duplicate cards for the same agency (e.g. org-gb-rlf vs org-gb-07798821)
-    const seenOrgs = new Set<string>();
-    agents = agents.filter((a) => {
-      const orgKey = (a.provider_org || a.name || a.slug).toLowerCase().trim();
-      if (seenOrgs.has(orgKey)) return false;
-      seenOrgs.add(orgKey);
-      return true;
-    });
+    // Rows arrive created_at DESC, so "first seen" would keep a duplicate CH-suffixed
+    // slug (e.g. rentlondonflat-com-ltd-07798821) over the canonical one
+    // (rentlondonflat-com-ltd / org-gb-rlf). Prefer the slug with no `-<8 digits>`
+    // suffix, then the oldest row.
+    const canonical = (a: PublicRegistryAgent) => !/-\d{8}$/.test(a.slug);
+    const orgKey = (a: PublicRegistryAgent) => (a.provider_org || a.name || a.slug).toLowerCase().trim();
+    const winners = new Map<string, PublicRegistryAgent>();
+    for (const a of agents) {
+      const cur = winners.get(orgKey(a));
+      if (!cur || (canonical(a) !== canonical(cur) ? canonical(a) : a.created_at < cur.created_at)) {
+        winners.set(orgKey(a), a);
+      }
+    }
+    agents = agents.filter((a) => winners.get(orgKey(a)) === a);
   }
   return { agents, total: f.orgOnly ? agents.length : (count ?? 0) };
 }
