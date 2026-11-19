@@ -100,11 +100,16 @@ export interface ListFilters {
   offset: number;
 }
 
-export function isOrganisationAgent(a: Pick<PublicRegistryAgent, 'categories' | 'provider_org' | 'name' | 'slug'>): boolean {
+export function isOrganisationAgent(
+  a: Pick<PublicRegistryAgent, 'categories' | 'provider_org' | 'name' | 'slug'> &
+    Partial<Pick<PublicRegistryAgent, 'well_known_uri'>>
+): boolean {
   if (a.categories?.includes('individual_agent') || a.categories?.includes('negotiator')) {
     return false;
   }
-  return true;
+  // Individual negotiator cards are served at /agent/agt-<id>; the agency card is the
+  // organisation, so the negotiator card never lists in the org directory.
+  return !a.well_known_uri?.includes('/agent/agt-');
 }
 
 export async function listAgents(f: ListFilters): Promise<{ agents: PublicRegistryAgent[]; total: number }> {
