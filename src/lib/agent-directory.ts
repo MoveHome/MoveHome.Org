@@ -13,7 +13,8 @@ export interface EstateAgentProfile {
   licences: string[];
   agent_card_url: string;
   logo_url?: string | null;
-  verified: boolean;
+  /** Other entity ids this same agency is served under (e.g. its A2A card id). */
+  aliases?: string[];
 }
 
 export const ESTATE_AGENT_PROFILES: Record<string, EstateAgentProfile> = {
@@ -36,7 +37,7 @@ export const ESTATE_AGENT_PROFILES: Record<string, EstateAgentProfile> = {
       'HMRC AML Supervised Estate Agency'
     ],
     agent_card_url: 'https://app.estateaigents.com/.well-known/agent.json',
-    verified: true
+    aliases: ['org-gb-rlf']
   },
   'org-th-0105561135324': {
     agent_id: 'org-th-0105561135324',
@@ -55,8 +56,7 @@ export const ESTATE_AGENT_PROFILES: Record<string, EstateAgentProfile> = {
       'Thai PDPA Data Protection Compliant',
       'Verified Foreign Quota & Leasehold Due Diligence'
     ],
-    agent_card_url: 'https://app.estateaigents.com/.well-known/agent.json',
-    verified: true
+    agent_card_url: 'https://app.estateaigents.com/.well-known/agent.json'
   }
 };
 
@@ -68,7 +68,7 @@ export function getEstateAgentProfile(agentIdOrSlug: string | null | undefined):
     return ESTATE_AGENT_PROFILES[agentIdOrSlug];
   }
   const match = Object.values(ESTATE_AGENT_PROFILES).find(
-    (p) => p.slug === agentIdOrSlug || p.agent_id === agentIdOrSlug
+    (p) => p.slug === agentIdOrSlug || p.agent_id === agentIdOrSlug || p.aliases?.includes(agentIdOrSlug)
   );
   return match ?? null;
 }
