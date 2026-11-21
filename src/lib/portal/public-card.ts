@@ -7,6 +7,7 @@
 // withdrawn_at = now().
 
 import { createSupabaseAdminClient } from '@/lib/supabase-admin';
+import { UK_POSTCODE_AREA_MAP } from '@/lib/property-card';
 import { createHash } from 'node:crypto';
 import type { Json } from '@/lib/database.types';
 import type { ListingPayloadT } from './validation';
@@ -35,7 +36,7 @@ function mapServiceType(payload: ListingPayloadT):
   if (payload.transaction_type === 'SALES') return 'sale';
   if (payload.kind === 'residential') {
     const freq = payload.rent_frequency;
-    if (freq === 'WEEKLY') return 'short_term';
+    if (freq === 'WEEKLY' || freq === 'DAILY') return 'short_term';
   }
   return 'long_term';
 }
@@ -144,12 +145,22 @@ export async function upsertPublicCard(args: DeriveArgs): Promise<DerivedCard | 
   // Pricing / currency
   let rent_pcm: number | null = null;
   let asking_price: number | null = null;
+  let daily_rate: number | null = null;
   let currency: string | null = null;
   if (payload.kind === 'residential') {
     // Absent price stays null: a Let Agreed card is price-less (owner decision
     // 2026-10-28) and 0 would render as a real, wrong asking rent.
     if (payload.transaction_type === 'LETTINGS') {
-      rent_pcm = payload.asking_rent_pcm != null ? Math.round(payload.asking_rent_pcm) : null;
+      const freq = payload.rent_frequency;
+      if (freq === 'WEEKLY' || freq === 'DAILY') {
+        // A weekly short let is quoted per week; the card shows a nightly rate.
+        daily_rate =
+          payload.asking_rent_pcm != null
+            ? Math.round(freq === 'WEEKLY' ? payload.asking_rent_pcm / 4.33 / 7 : payload.asking_rent_pcm)
+            : null;
+      } else {
+        rent_pcm = payload.asking_rent_pcm != null ? Math.round(payload.asking_rent_pcm) : null;
+      }
     } else {
       asking_price = payload.asking_price != null ? Math.round(payload.asking_price) : null;
     }
@@ -222,6 +233,8 @@ export async function upsertPublicCard(args: DeriveArgs): Promise<DerivedCard | 
   // Address fields — suppress display if requested.
   const display_address = suppress ? null : address.display_address;
   const postcode = address.postcode;
+  const postcode_district = postcode.match(/^([A-Z]{1,2}\d[A-Z\d]?)/i)?.[1].toUpperCase() ?? null;
+  const suburb = postcode_district ? UK_POSTCODE_AREA_MAP[postcode_district] ?? null : null;
   const street_name = suppress ? null : extractStreet(address.display_address);
 
   const upsertBody = {
@@ -241,9 +254,12 @@ export async function upsertPublicCard(args: DeriveArgs): Promise<DerivedCard | 
     latitude: address.latitude ?? null,
     longitude: address.longitude ?? null,
     postcode_full: postcode,
+    postcode_district,
+    suburb,
     street_name,
     rent_pcm,
     asking_price,
+    daily_rate,
     currency,
     listing_status,
     visibility: 'public',
