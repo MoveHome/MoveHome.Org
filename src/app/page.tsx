@@ -1,3 +1,4 @@
+import React from 'react';
 import ThemeToggle from '@/components/ThemeToggle';
 
 function BotInShield({ className = "w-10 h-10" }: { className?: string }) {
@@ -25,8 +26,31 @@ function BotInShield({ className = "w-10 h-10" }: { className?: string }) {
 }
 
 export default function HomePage() {
+  const jsonLd = {
+    '@context': 'https://schema.org',
+    '@graph': [
+      {
+        '@type': 'Organization',
+        name: 'MoveHome.org',
+        legalName: 'Move Home Organisation CIC',
+        identifier: '17202438',
+        url: 'https://movehome.org',
+        sameAs: ['https://estateaigents.org'],
+      },
+      {
+        '@type': 'WebSite',
+        name: 'MoveHome.org',
+        url: 'https://movehome.org',
+      },
+    ],
+  };
+
   return (
     <div className="min-h-screen flex flex-col justify-between bg-[var(--bg)] text-[var(--text)] font-sans selection:bg-[var(--tint-light)] selection:text-[var(--accent-hover)]">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+      />
 
       {/* Navigation */}
       <nav className="fixed top-0 left-0 right-0 z-50 flex min-h-16 flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-[var(--border)] bg-[var(--bg)]/80 px-4 py-2 backdrop-blur-md sm:px-6 md:px-12">
@@ -76,7 +100,7 @@ export default function HomePage() {
           </div>
 
           <h1 className="text-4xl md:text-5xl font-extrabold tracking-tight mb-6 max-w-3xl leading-tight">
-            Browse properties.<br />
+            MoveHome.org — Browse properties.<br />
             <span className="text-[var(--accent)]">Let AI handle the rest.</span>
           </h1>
 
@@ -198,7 +222,10 @@ export default function HomePage() {
             <a href="https://estateaigents.com" target="_blank" rel="noopener noreferrer" className="hover:text-[var(--accent)] transition-colors">.com</a>
             <a href="https://estateaigents.org" target="_blank" rel="noopener noreferrer" className="hover:text-[var(--accent)] transition-colors">.org</a>
             <a href="https://github.com/MoveHome/MoveHome.Org" target="_blank" rel="noopener noreferrer" className="hover:text-[var(--accent)] transition-colors">GitHub</a>
+            <a href="/about" className="hover:text-[var(--accent)] transition-colors">About</a>
             <a href="/charter" className="hover:text-[var(--accent)] transition-colors">Charter</a>
+            <a href="/registry" className="hover:text-[var(--accent)] transition-colors">Registry</a>
+            <a href="/connect" className="hover:text-[var(--accent)] transition-colors">Connect</a>
             <a href="/terms" className="hover:text-[var(--accent)] transition-colors">Terms</a>
             <a href="/privacy" className="hover:text-[var(--accent)] transition-colors">Privacy</a>
           </div>
