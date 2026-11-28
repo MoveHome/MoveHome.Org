@@ -122,8 +122,7 @@ export async function getAgentBySlug(slug: string): Promise<EstateAgentProfile |
           website: regAgent.provider_url || regAgent.a2a_url || 'https://movehome.org',
           licences: ['RAIA Protocol Listed Agent'],
           agent_card_url: regAgent.well_known_uri || regAgent.a2a_url || 'https://app.estateaigents.com/.well-known/agent.json',
-          logo_url: regAgent.icon_url || null,
-          verified: true
+          logo_url: regAgent.icon_url || null
         };
       }
     } catch {

@@ -7,6 +7,105 @@ import { sanitizeDescription } from './sanitize-description';
 
 const SYMBOLS: Record<string, string> = { THB: '฿', GBP: '£', USD: '$', EUR: '€' };
 
+// Outward postcode → the place name a card can show next to the code. Grouped
+// so a district that shares a name with its neighbours needs one line, not many.
+const AREA_CODES: [area: string, codes: string][] = [
+  ['Wembley', 'HA9'],
+  ['Hammersmith', 'W6'],
+  ['Holborn', 'WC2B WC2A WC1R'],
+  ['Fitzrovia', 'W1T W1W'],
+  ['Canary Wharf', 'E14'],
+  ['Bow', 'E3'],
+  ['Belgravia', 'SW1W SW1X'],
+  ['Chelsea', 'SW3'],
+  ['Fulham', 'SW6'],
+  ['Kensington', 'W8'],
+  ['Bayswater', 'W2'],
+  ['Shepherds Bush', 'W12'],
+  ['Southwark', 'SE1 SE1P'],
+  ['Greenwich', 'SE10'],
+  ['Blackheath', 'SE3'],
+  ['Islington', 'N1'],
+  ['Kings Cross', 'N1C'],
+  ['Southgate', 'N14'],
+  ['Mill Hill', 'NW7'],
+  ['Colindale', 'NW9'],
+  ['Kensal Green', 'NW10'],
+  ['Clerkenwell', 'EC1 EC1V EC1A EC1M EC1R EC1N EC1Y WC1X'],
+  ['Brixton', 'SW2'],
+  ['Earls Court', 'SW5'],
+  ['South Kensington', 'SW7'],
+  ['Notting Hill', 'W11'],
+  ['Southall', 'UB1'],
+  ['Greenford', 'UB6'],
+  ['Windlesham', 'GU20'],
+  ['Fleet', 'GU51'],
+  ['Reading', 'RG2'],
+  ['Birmingham', 'B1 B2 B3 B4 B5 B6 B7 B8 B9 B10 B11 B12 B13 B14 B15 B16 B17 B18 B19 B20 B21 B23 B24 B25 B26 B27 B28 B29 B30 B31 B32 B33 B34 B35 B36 B37 B38 B40 B42 B43 B44 B45 B46 B47 B48'],
+  ['Romford', 'RM1'],
+  ['Wallingford', 'OX10'],
+  ['Slough', 'SL3'],
+  ['Lewisham', 'SE13'],
+  ['Westminster', 'SW1 SW1A SW1H SW1P SW1V SW1Y'],
+  ['City of London', 'EC2 EC2A EC2M EC2V EC2Y EC3 EC3A EC3V EC4 EC4A EC4M EC4R EC4V'],
+  ['Bloomsbury', 'WC1 WC1A WC1B WC1E WC1H WC1N'],
+  ['Covent Garden', 'WC2 WC2E WC2H WC2N'],
+  ['Mayfair', 'W1 W1C W1J W1K W1S'],
+  ['Soho', 'W1D W1F'],
+  ['Marylebone', 'W1B W1G W1H W1U'],
+  ['Whitechapel', 'E1'],
+  ['Bethnal Green', 'E2'],
+  ['Dalston', 'E8'],
+  ['Hackney', 'E9'],
+  ['Stratford', 'E15'],
+  ['Camden', 'NW1'],
+  ['Hampstead', 'NW3'],
+  ['Kentish Town', 'NW5'],
+  ['St Johns Wood', 'NW8'],
+  ['Clapham', 'SW4'],
+  ['Nine Elms', 'SW8'],
+  ['Stockwell', 'SW9'],
+  ['Battersea', 'SW11'],
+  ['Balham', 'SW12'],
+  ['Putney', 'SW15'],
+  ['Wimbledon', 'SW19'],
+  ['Acton', 'W3'],
+  ['Chiswick', 'W4'],
+  ['Ealing', 'W5'],
+  ['Maida Vale', 'W9'],
+  ['North Kensington', 'W10'],
+  ['West Kensington', 'W14'],
+  ['Kilburn', 'NW6'],
+  ['Golders Green', 'NW11'],
+  ['Finsbury Park', 'N4'],
+  ['Highbury', 'N5'],
+  ['Highgate', 'N6'],
+  ['Holloway', 'N7'],
+  ['Muswell Hill', 'N10'],
+  ['Wood Green', 'N22'],
+  ['Leyton', 'E10'],
+  ['Leytonstone', 'E11'],
+  ['Walthamstow', 'E17'],
+  ['Camberwell', 'SE5'],
+  ['Deptford', 'SE8'],
+  ['Peckham', 'SE15'],
+  ['Elephant and Castle', 'SE17'],
+  ['Woolwich', 'SE18'],
+  ['East Dulwich', 'SE22'],
+  ['Forest Hill', 'SE23'],
+  ['Manchester', 'M1 M2 M3 M4 M11 M12 M13 M14 M15 M20'],
+  ['Salford', 'M5 M6 M7 M50'],
+  ['Bristol', 'BS1 BS2 BS3 BS4 BS5 BS6 BS7 BS8'],
+  ['Leeds', 'LS1 LS2 LS3 LS4 LS5 LS6 LS7 LS8 LS9'],
+  ['Liverpool', 'L1 L2 L3 L4 L5 L6 L7 L8'],
+  ['Glasgow', 'G1 G2 G3 G4 G5 G11 G12 G13 G14 G15 G20 G21 G22 G23 G31 G32 G33 G34 G40 G41 G42 G43 G44 G45 G46 G51 G52 G53 G60 G61 G62 G63 G64 G65 G66 G67 G68 G69 G71 G72 G73 G74 G75 G76 G77 G78 G81 G82 G83 G84'],
+  ['Edinburgh', 'EH1 EH2 EH3 EH4 EH5 EH6 EH7 EH8 EH9 EH10 EH11 EH12 EH13 EH14 EH15 EH16 EH17']
+];
+
+export const UK_POSTCODE_AREA_MAP: Record<string, string> = Object.fromEntries(
+  AREA_CODES.flatMap(([area, codes]) => codes.split(' ').map((code) => [code, area]))
+);
+
 export function priceLabel(l: Listing): string {
   const money = (n: number) =>
     `${SYMBOLS[l.currency ?? ''] ?? `${l.currency ?? ''} `}${n.toLocaleString('en-GB')}`;
@@ -16,13 +115,30 @@ export function priceLabel(l: Listing): string {
   return 'Price on application';
 }
 
+// A headline that ends on a bare outward code ("... in HA9") reads as a gap,
+// so the area name is resolved from the map when the listing has no suburb.
+const OUTWARD_IN_RE = /\bin\s+([A-Z]{1,2}\d[A-Z\d]?)$/i;
+
+export function resolvedSuburbOf(l: Listing): string | null {
+  return (
+    l.suburb?.trim() ||
+    (l.postcode_district
+      ? UK_POSTCODE_AREA_MAP[l.postcode_district.trim().toUpperCase()] ?? null
+      : null)
+  );
+}
+
 export function titleOf(l: Listing): string {
   const t =
     l.headline ??
     l.development_name ??
-    [l.suburb, l.postcode_district].filter(Boolean).join(' ');
+    [resolvedSuburbOf(l), l.postcode_district].filter(Boolean).join(' ');
   // Upstream headlines ship "2-bedflat"; split the run-together word.
-  const raw = (t || l.raia_id).replace(/(\d+-bed)flat/gi, '$1 flat');
+  let raw = (t || l.raia_id).replace(/(\d+-bed)flat/gi, '$1 flat');
+  const area = resolvedSuburbOf(l);
+  if (area && !raw.toLowerCase().includes(area.toLowerCase())) {
+    raw = raw.replace(OUTWARD_IN_RE, (full, code: string) => `in ${area} ${code}`);
+  }
   // A 0-bed room is marketed as a studio, never "0 Bed Flat".
   return l.bedrooms === 0
     ? raw.replace(/\b0[\s-]?bed(?:room)?s?\b(?:\s*(?:flat|apartment))?/gi, 'Studio Flat')
@@ -305,7 +421,7 @@ export function cityOf(l: Listing): string | null {
 
 // Every label this listing can be found by: city and suburb.
 export function locationsOf(l: Listing): string[] {
-  return [cityOf(l), l.suburb?.trim() || null].filter((x): x is string => Boolean(x));
+  return [cityOf(l), resolvedSuburbOf(l)].filter((x): x is string => Boolean(x));
 }
 
 // Monthly-equivalent price in GBP for the budget filter.
@@ -491,7 +607,7 @@ export function buildPropertyDescriptionWithCta(
     rawBody = desc;
   } else {
     // Structured synthesized sales narrative fallback
-    const area = [l.suburb, l.postcode_district].filter(Boolean).join(', ');
+    const area = [resolvedSuburbOf(l), l.postcode_district].filter(Boolean).join(', ');
     const isSale = l.service_type === 'sale';
     const actionWord = isSale ? 'Buy' : 'Rent';
     const typeWord = l.bedrooms === 0 ? 'Studio' : l.bedrooms != null ? `${l.bedrooms}-bed property` : 'property';

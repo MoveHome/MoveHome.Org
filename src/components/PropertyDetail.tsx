@@ -1,4 +1,5 @@
 import type { Listing } from '@/lib/types';
+import { resolvedSuburbOf } from '@/lib/property-card';
 import AgentAttribution from './AgentAttribution';
 
 function formatPrice(l: Listing): string {
@@ -27,10 +28,10 @@ export default function PropertyDetail({ listing }: { listing: Listing }) {
     <article className="max-w-5xl mx-auto px-4 py-6">
       <header className="mb-4">
         <h1 className="text-2xl font-semibold">
-          {listing.headline ?? listing.suburb ?? listing.postcode_district ?? listing.raia_id}
+          {listing.headline ?? resolvedSuburbOf(listing) ?? listing.postcode_district ?? listing.raia_id}
         </h1>
         <p className="text-slate-500 mt-1 text-sm">
-          {[listing.suburb, listing.postcode_district].filter(Boolean).join(', ')}
+          {[resolvedSuburbOf(listing), listing.postcode_district].filter(Boolean).join(', ')}
         </p>
         {listing.listing_status && listing.listing_status !== 'available' && (
           <span className="mt-3 inline-block rounded-full border border-[var(--border)] bg-[var(--bg-elev)] px-2.5 py-1 text-xs font-semibold capitalize text-[var(--text)]">
