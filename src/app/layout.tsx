@@ -6,9 +6,6 @@ export const metadata: Metadata = {
   metadataBase: new URL('https://movehome.org'),
   title: 'MoveHome.org — The Non-Profit Behind RAIA Protocol',
   description: 'Move Home Organisation CIC (Co. No. 17202438) is a UK Community Interest Company. Asset-locked, mission-bound.',
-  alternates: {
-    canonical: 'https://movehome.org',
-  },
   robots: {
     index: true,
     follow: true,
@@ -16,12 +13,11 @@ export const metadata: Metadata = {
   openGraph: {
     title: 'MoveHome.org — The Non-Profit Behind RAIA Protocol',
     description: 'Move Home Organisation CIC (Co. No. 17202438) is a UK Community Interest Company. Asset-locked, mission-bound.',
-    url: 'https://movehome.org',
     siteName: 'MoveHome.org',
     type: 'website',
   },
   twitter: {
-    card: 'summary_large_image',
+    card: 'summary',
     title: 'MoveHome.org — The Non-Profit Behind RAIA Protocol',
     description: 'Move Home Organisation CIC (Co. No. 17202438) is a UK Community Interest Company. Asset-locked, mission-bound.',
   },

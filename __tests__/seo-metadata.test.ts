@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import robots from '../src/app/robots';
 import sitemap from '../src/app/sitemap';
 import { metadata } from '../src/app/layout';
-import HomePage from '../src/app/page';
+import HomePage, { metadata as homeMetadata } from '../src/app/page';
 
 type ElementProps = {
   children?: ReactNode;
@@ -65,18 +65,23 @@ describe('MoveHome.org SEO Metadata Bundle', () => {
 
   it('layout metadata has metadataBase, canonical, robots, OG and Twitter', () => {
     expect(metadata.metadataBase?.toString()).toBe('https://movehome.org/');
-    expect(metadata.alternates?.canonical).toBe('https://movehome.org');
+    // No site-wide canonical: it would collapse every route onto the home page.
+    expect(metadata.alternates?.canonical).toBeUndefined();
     expect(metadata.robots).toEqual({ index: true, follow: true });
     expect(metadata.openGraph).toMatchObject({
       title: 'MoveHome.org — The Non-Profit Behind RAIA Protocol',
       description: 'Move Home Organisation CIC (Co. No. 17202438) is a UK Community Interest Company. Asset-locked, mission-bound.',
-      url: 'https://movehome.org',
       siteName: 'MoveHome.org',
       type: 'website',
     });
     expect(metadata.twitter).toMatchObject({
-      card: 'summary_large_image',
+      card: 'summary',
     });
+  });
+
+  it('canonical is set on the home page only', () => {
+    expect(homeMetadata.alternates?.canonical).toBe('/');
+    expect(homeMetadata.openGraph).toMatchObject({ url: '/' });
   });
 
   it('page.tsx embeds JSON-LD and includes brand H1 & footer links', () => {

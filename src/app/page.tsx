@@ -1,5 +1,13 @@
 import React from 'react';
+import type { Metadata } from 'next';
 import ThemeToggle from '@/components/ThemeToggle';
+
+// Canonical lives on the home page only: set in the root layout it would be
+// inherited by every route without its own, collapsing them all onto "/".
+export const metadata: Metadata = {
+  alternates: { canonical: '/' },
+  openGraph: { url: '/' },
+};
 
 function BotInShield({ className = "w-10 h-10" }: { className?: string }) {
   return (
