@@ -3,10 +3,13 @@ import type { Listing } from '@/lib/types';
 import {
   clusterOf,
   hasMedia,
+  locationsOf,
   plainText,
   priceLabel,
+  resolvedSuburbOf,
   specGroups,
   statusLabel,
+  titleOf,
   viewingSlots
 } from '@/lib/property-card';
 
@@ -95,6 +98,52 @@ describe('clusterOf', () => {
 
   it('returns other for elsewhere', () => {
     expect(clusterOf(listing({ currency: 'USD', jurisdiction: 'US', un_locode: 'USNYC' }))).toBe('other');
+  });
+});
+
+describe('resolvedSuburbOf', () => {
+  it('prefers the listing suburb', () => {
+    expect(resolvedSuburbOf(listing({ suburb: ' Phloen Chit ' }))).toBe('Phloen Chit');
+  });
+
+  it('falls back to the outward postcode area', () => {
+    expect(resolvedSuburbOf(listing({ suburb: null, postcode_district: 'ha9' }))).toBe('Wembley');
+    expect(resolvedSuburbOf(listing({ suburb: null, postcode_district: 'WC2B' }))).toBe('Holborn');
+  });
+
+  it('returns null when neither is known', () => {
+    expect(resolvedSuburbOf(listing({ suburb: null, postcode_district: null }))).toBeNull();
+    expect(resolvedSuburbOf(listing({ suburb: null, postcode_district: 'ZZ99' }))).toBeNull();
+  });
+});
+
+describe('titleOf', () => {
+  it('expands a bare outward postcode with the area name', () => {
+    expect(
+      titleOf(listing({ headline: '2-bedroom flat to rent in HA9', suburb: null, postcode_district: 'HA9' }))
+    ).toBe('2-bedroom flat to rent in Wembley HA9');
+    expect(
+      titleOf(listing({ headline: '2-bedroom flat to rent in WC2B', suburb: null, postcode_district: 'WC2B' }))
+    ).toBe('2-bedroom flat to rent in Holborn WC2B');
+  });
+
+  it('does not duplicate an area already in the headline', () => {
+    const l = listing({ headline: '2-bedroom flat to rent in Wembley HA9', suburb: null, postcode_district: 'HA9' });
+    expect(titleOf(l)).toBe('2-bedroom flat to rent in Wembley HA9');
+  });
+
+  it('builds a fallback title with area and postcode', () => {
+    expect(
+      titleOf(listing({ headline: null, development_name: null, suburb: null, postcode_district: 'W6', raia_id: 'x' }))
+    ).toBe('Hammersmith W6');
+  });
+});
+
+describe('locationsOf', () => {
+  it('includes the resolved postcode area', () => {
+    expect(
+      locationsOf(listing({ suburb: null, postcode_district: 'E14', un_locode: 'GBLON' }))
+    ).toEqual(['London', 'Canary Wharf']);
   });
 });
 

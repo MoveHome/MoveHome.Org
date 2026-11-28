@@ -2,6 +2,7 @@ import { notFound } from 'next/navigation';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { getEstateAgentProfile } from '@/lib/agent-directory';
+import { isDirectoryEntityPublic } from '@/lib/registry/publication';
 import { searchListings } from '@/lib/queries';
 import { priceLabel, titleOf } from '@/lib/property-card';
 
@@ -27,7 +28,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 export default async function EstateAgentPage({ params }: Props) {
   const { agent_id } = await params;
   const profile = getEstateAgentProfile(agent_id);
-  if (!profile) {
+  if (!profile || !(await isDirectoryEntityPublic(agent_id))) {
     notFound();
   }
 

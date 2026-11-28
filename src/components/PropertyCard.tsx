@@ -17,6 +17,7 @@ import {
   availabilityOf,
   mediaSlidesOf,
   priceLabel,
+  resolvedSuburbOf,
   specGroups,
   statusLabel,
   titleOf,
@@ -67,7 +68,7 @@ const heroPhoto = (l: Listing) =>
   ) ?? null;
 
 function areaOf(l: Listing): string {
-  return [l.suburb, l.postcode_district ?? l.postcode_full].filter(Boolean).join(', ') || 'the area';
+  return [resolvedSuburbOf(l), l.postcode_district ?? l.postcode_full].filter(Boolean).join(', ') || 'the area';
 }
 
 export default function PropertyCard({

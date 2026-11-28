@@ -50,7 +50,7 @@ export const FurnishingEnum = z.enum([
   'FURNISHED_OR_UNFURNISHED'
 ]);
 
-export const RentFrequencyEnum = z.enum(['MONTHLY', 'YEARLY', 'WEEKLY']);
+export const RentFrequencyEnum = z.enum(['MONTHLY', 'YEARLY', 'WEEKLY', 'DAILY']);
 
 export const ParkingEnum = z.enum([
   'OFF_STREET',

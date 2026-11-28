@@ -129,7 +129,7 @@ Response — **`201 Created`** (new) or **`200 OK`** (update / no-change):
 | `bedrooms`/`bathrooms`/`reception_rooms` | int ≥0 | no | |
 | `floor_area_sqm` | number ≥0 | no | |
 | `available_from` | `YYYY-MM-DD` | no | |
-| `rent_frequency` | `MONTHLY`\|`YEARLY`\|`WEEKLY` | no | |
+| `rent_frequency` | `MONTHLY`\|`YEARLY`\|`WEEKLY`\|`DAILY` | no | `WEEKLY`/`DAILY` publish as a short let; the card shows the nightly equivalent of `asking_rent_pcm` (still the monthly figure) |
 | `deposit` | number ≥0 | no | |
 | `currency` | ISO-4217 | no | `GBP`, `THB` |
 | `tenure` | tenure enum | no | **SALES only** |
