@@ -35,14 +35,17 @@ export async function isDirectoryEntityPublic(entityId: string): Promise<boolean
         .eq('hidden', false)
         .eq('publication_status', 'published')
         .eq('raw_card->>agent_id', entityId)
-        .maybeSingle()
+        // limit(1), not maybeSingle(): two published rows sharing an agent_id
+        // would make maybeSingle() error, and the gate would 404 a real partner.
+        .limit(1)
     ]);
     if (raia?.error || a2a?.error) {
       throw new Error(raia?.error?.message ?? a2a?.error?.message ?? 'registry query failed');
     }
     const approved =
       !!raia?.data && raia.data.verification_status === 'approved' && !raia.data.revoked_at;
-    return approved || !!a2a?.data;
+    const published = Array.isArray(a2a?.data) && a2a.data.length > 0;
+    return approved || published;
   } catch (err) {
     if (!warned.has(entityId)) {
       warned.add(entityId);

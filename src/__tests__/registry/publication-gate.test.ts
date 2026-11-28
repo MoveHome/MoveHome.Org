@@ -39,7 +39,7 @@ describe('isDirectoryEntityPublic', () => {
   });
 
   it('is true for a published A2A row keyed by raw_card.agent_id (org-gb-rlf)', async () => {
-    responses[A2A] = { data: { id: 'row-1' }, error: null };
+    responses[A2A] = { data: [{ id: 'row-1' }], error: null };
     responses[RAIA] = { data: null, error: null };
     await expect(isDirectoryEntityPublic('org-gb-rlf')).resolves.toBe(true);
   });
@@ -57,6 +57,18 @@ describe('isDirectoryEntityPublic', () => {
       error: null
     };
     await expect(isDirectoryEntityPublic('org-th-0105561135324')).resolves.toBe(false);
+  });
+
+  it('stays true when two published A2A rows share the agent_id', async () => {
+    responses[A2A] = { data: [{ id: 'row-1' }, { id: 'row-2' }], error: null };
+    responses[RAIA] = { data: null, error: null };
+    await expect(isDirectoryEntityPublic('org-gb-rlf')).resolves.toBe(true);
+  });
+
+  it('is false for an empty A2A result set', async () => {
+    responses[A2A] = { data: [], error: null };
+    responses[RAIA] = { data: null, error: null };
+    await expect(isDirectoryEntityPublic('org-gb-throne')).resolves.toBe(false);
   });
 
   it('fails closed and warns once on a DB error', async () => {

@@ -153,11 +153,11 @@ export async function upsertPublicCard(args: DeriveArgs): Promise<DerivedCard | 
     if (payload.transaction_type === 'LETTINGS') {
       const freq = payload.rent_frequency;
       if (freq === 'WEEKLY' || freq === 'DAILY') {
-        // A weekly short let is quoted per week; the card shows a nightly rate.
+        // asking_rent_pcm is always the per-calendar-month figure (feed contract),
+        // whatever rent_frequency says; a short let's card shows the nightly
+        // equivalent of it (12 months / 365 nights).
         daily_rate =
-          payload.asking_rent_pcm != null
-            ? Math.round(freq === 'WEEKLY' ? payload.asking_rent_pcm / 4.33 / 7 : payload.asking_rent_pcm)
-            : null;
+          payload.asking_rent_pcm != null ? Math.round((payload.asking_rent_pcm * 12) / 365) : null;
       } else {
         rent_pcm = payload.asking_rent_pcm != null ? Math.round(payload.asking_rent_pcm) : null;
       }
